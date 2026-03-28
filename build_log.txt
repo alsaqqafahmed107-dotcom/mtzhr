@@ -1,0 +1,29 @@
+Launching lib\main.dart on Infinix X6725 in debug mode...
+Running Gradle task 'assembleDebug'...                          
+lib/services/translations.dart:2:65: Error: Constant evaluation error:
+  static const Map<String, Map<String, String>> _translations = {
+                                                                ^
+lib/services/translations.dart:519:7: Context: The key '"face_server_error"' conflicts with another existing key in the map.
+      'face_server_error': '?? ???? ??????? ?????? ?????? ??????',
+      ^
+lib/services/translations.dart:2:49: Context: While analyzing:
+  static const Map<String, Map<String, String>> _translations = {
+                                                ^
+Target kernel_snapshot_program failed: Exception
+
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileFlutterBuildDebug'.
+> Process 'command 'C:\src\flutter\bin\flutter.bat'' finished with non-zero exit value 1
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 12s
+Running Gradle task 'assembleDebug'...                             13.4s
+Error: Gradle task assembleDebug failed with exit code 1

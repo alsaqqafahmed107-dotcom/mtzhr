@@ -1,0 +1,56 @@
+#include "Generated.xcconfig"
+
+// Custom profile build configuration
+// Optimized for profiling and performance analysis
+
+// Disable bitcode for profile builds
+ENABLE_BITCODE = NO
+
+// Moderate optimization for profile builds
+GCC_OPTIMIZATION_LEVEL = 2
+
+// Enable link time optimization
+GCC_LTO_ENABLED = YES
+
+// Enable dead code stripping
+DEAD_CODE_STRIPPING = YES
+
+// Enable arm64 for simulator
+EXCLUDED_ARCHS[sdk=iphonesimulator*] = 
+
+// Set deployment target
+IPHONEOS_DEPLOYMENT_TARGET = 12.0
+
+// Enable modular headers
+CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES = YES
+
+// Set Swift version
+SWIFT_VERSION = 5.0
+
+// Enable code signing
+CODE_SIGNING_REQUIRED = YES
+CODE_SIGNING_ALLOWED = YES
+
+// Enable automatic signing
+CODE_SIGN_STYLE = Automatic
+
+// Set minimum deployment target for macOS
+MACOSX_DEPLOYMENT_TARGET = 10.15
+
+// Profile environment definitions
+GCC_PREPROCESSOR_DEFINITIONS = $(inherited) PROFILE=1 CUSTOM_PROFILE=1
+
+// Enable profiling
+GCC_GENERATE_PROFILING_CODE = YES
+
+// Enable debug symbols for profiling
+DEBUG_INFORMATION_FORMAT = dwarf-with-dsym
+
+// Enable performance analysis
+GCC_ENABLE_PERFORMANCE_ANALYSIS = YES
+
+// Custom profile flags
+OTHER_CFLAGS = $(inherited) -DPROFILE_FLAG=1
+
+// Custom profile linker flags
+OTHER_LDFLAGS = $(inherited) -Wl,-profile 

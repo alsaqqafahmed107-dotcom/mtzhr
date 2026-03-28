@@ -1,0 +1,53 @@
+#include "Generated.xcconfig"
+
+// Experimental build configuration
+// Use with caution - may cause issues
+
+// Disable bitcode for experimental builds
+ENABLE_BITCODE = NO
+
+// Aggressive optimization
+GCC_OPTIMIZATION_LEVEL = 3
+
+// Enable link time optimization
+GCC_LTO_ENABLED = YES
+
+// Enable dead code stripping
+DEAD_CODE_STRIPPING = YES
+
+// Enable arm64 for simulator
+EXCLUDED_ARCHS[sdk=iphonesimulator*] = 
+
+// Set deployment target
+IPHONEOS_DEPLOYMENT_TARGET = 12.0
+
+// Enable modular headers
+CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES = YES
+
+// Set Swift version
+SWIFT_VERSION = 5.0
+
+// Enable code signing
+CODE_SIGNING_REQUIRED = YES
+CODE_SIGNING_ALLOWED = YES
+
+// Enable automatic signing
+CODE_SIGN_STYLE = Automatic
+
+// Set minimum deployment target for macOS
+MACOSX_DEPLOYMENT_TARGET = 10.15
+
+// Experimental preprocessor definitions
+GCC_PREPROCESSOR_DEFINITIONS = $(inherited) EXPERIMENTAL=1
+
+// Enable parallel builds
+GCC_PARALLEL_CODE_GENERATION = YES
+
+// Enable aggressive optimization
+GCC_FAST_MATH = YES
+
+// Enable vectorization
+GCC_VECTORIZE_LOOPS = YES
+
+// Enable experimental features
+GCC_ENABLE_EXPERIMENTAL_FEATURES = YES 

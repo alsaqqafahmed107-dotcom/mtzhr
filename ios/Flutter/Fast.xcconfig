@@ -1,0 +1,41 @@
+#include "Generated.xcconfig"
+
+// Disable bitcode for faster builds
+ENABLE_BITCODE = NO
+
+// Minimal optimization for faster builds
+GCC_OPTIMIZATION_LEVEL = 0
+
+// Disable link time optimization for faster builds
+GCC_LTO_ENABLED = NO
+
+// Disable dead code stripping for faster builds
+DEAD_CODE_STRIPPING = NO
+
+// Enable arm64 for simulator
+EXCLUDED_ARCHS[sdk=iphonesimulator*] = 
+
+// Set deployment target
+IPHONEOS_DEPLOYMENT_TARGET = 12.0
+
+// Enable modular headers
+CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES = YES
+
+// Set Swift version
+SWIFT_VERSION = 5.0
+
+// Enable code signing
+CODE_SIGNING_REQUIRED = YES
+CODE_SIGNING_ALLOWED = YES
+
+// Enable automatic signing
+CODE_SIGN_STYLE = Automatic
+
+// Set minimum deployment target for macOS
+MACOSX_DEPLOYMENT_TARGET = 10.15
+
+// Enable fast build environment
+GCC_PREPROCESSOR_DEFINITIONS = $(inherited) FAST_BUILD=1
+
+// Disable parallel builds for faster builds
+GCC_PARALLEL_CODE_GENERATION = NO 

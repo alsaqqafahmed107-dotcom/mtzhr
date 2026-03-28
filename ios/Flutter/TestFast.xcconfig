@@ -1,0 +1,60 @@
+#include "Generated.xcconfig"
+
+// Custom fast test build configuration
+// Optimized for quick testing and development
+
+// Disable bitcode for fast test builds
+ENABLE_BITCODE = NO
+
+// Minimal optimization for fastest test builds
+GCC_OPTIMIZATION_LEVEL = 0
+
+// Disable link time optimization for fastest builds
+GCC_LTO_ENABLED = NO
+
+// Disable dead code stripping for fastest builds
+DEAD_CODE_STRIPPING = NO
+
+// Enable arm64 for simulator
+EXCLUDED_ARCHS[sdk=iphonesimulator*] = 
+
+// Set deployment target
+IPHONEOS_DEPLOYMENT_TARGET = 12.0
+
+// Enable modular headers
+CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES = YES
+
+// Set Swift version
+SWIFT_VERSION = 5.0
+
+// Enable code signing
+CODE_SIGNING_REQUIRED = YES
+CODE_SIGNING_ALLOWED = YES
+
+// Enable automatic signing
+CODE_SIGN_STYLE = Automatic
+
+// Set minimum deployment target for macOS
+MACOSX_DEPLOYMENT_TARGET = 10.15
+
+// Fast test environment definitions
+GCC_PREPROCESSOR_DEFINITIONS = $(inherited) TESTING=1 FAST_TEST=1
+
+// Disable test coverage for faster builds
+GCC_GENERATE_TEST_COVERAGE_FILES = NO
+
+// Minimal debug symbols for faster builds
+DEBUG_INFORMATION_FORMAT = dwarf
+
+// Disable runtime checks for faster builds
+GCC_ENABLE_STRICT_OVERFLOW_CHECKING = NO
+
+// Disable additional warnings for faster builds
+GCC_WARN_ABOUT_RETURN_TYPE = NO
+GCC_WARN_ABOUT_UNINITIALIZED_AUTOS = NO
+
+// Custom fast test flags
+OTHER_CFLAGS = $(inherited) -DFAST_TEST_FLAG=1
+
+// Custom fast test linker flags
+OTHER_LDFLAGS = $(inherited) -Wl,-fast 

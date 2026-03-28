@@ -1,0 +1,188 @@
+Launching lib\main.dart on Infinix X6725 in debug mode...
+Running Gradle task 'assembleDebug'...                             35.9s
+√ Built build\app\outputs\flutter-apk\app-debug.apk
+Installing build\app\outputs\flutter-apk\app-debug.apk...           9.7s
+D/FlutterJNI(13063): Beginning load of flutter...
+D/FlutterJNI(13063): flutter (null) was loaded normally!
+I/flutter (13063): [IMPORTANT:flutter/shell/platform/android/android_context_vk_impeller.cc(62)] Using the Impeller rendering backend (Vulkan).
+D/FlutterGeolocator(13063): Attaching Geolocator to activity
+I/flutter (13063): 🔔 [NotificationService] 🔄 جاري تهيئة خدمة الإشعارات...
+D/FlutterGeolocator(13063): Creating service.
+D/FlutterGeolocator(13063): Binding to location service.
+I/flutter (13063): 🔔 [NotificationService] ✅ تم تهيئة خدمة الإشعارات بنجاح
+I/flutter (13063): 🔍 جاري اكتشاف الرابط المحول...
+D/FlutterGeolocator(13063): Geolocator foreground service connected
+D/FlutterGeolocator(13063): Initializing Geolocator services
+D/FlutterGeolocator(13063): Flutter engine connected. Connected engine count 1
+Syncing files to device Infinix X6725...                           465ms
+
+Flutter run key commands.
+r Hot reload. 
+R Hot restart.
+h List all available interactive commands.
+d Detach (terminate "flutter run" but leave application running).
+c Clear the screen
+q Quit (terminate the application on the device).
+
+A Dart VM Service on Infinix X6725 is available at: http://127.0.0.1:59745/YnTKeR8buVw=/
+The Flutter DevTools debugger and profiler on Infinix X6725 is available at: http://127.0.0.1:59745/YnTKeR8buVw=/devtools/?uri=ws://127.0.0.1:59745/YnTKeR8buVw=/ws
+D/FdLeakLice(13063): FdLeakCheck app is not systemapp!!!
+I/flutter (13063): ✅ تم التأكد من عمل الرابط: http://192.168.1.162:5000
+I/flutter (13063): 🚀 جلب معلومات الموظف الكاملة...
+I/flutter (13063): 👤 البريد الإلكتروني: alskafahmed720@gmail.com
+I/flutter (13063): 🏢 ClientID: 187
+I/flutter (13063): 🔗 URL: http://192.168.1.162:5000/api/employee-full-info/187/get
+I/flutter (13063): 📦 Request Body: {"Email":"alskafahmed720@gmail.com"}
+I/flutter (13063): 🚀 جلب الطلبات...
+I/flutter (13063): 🔗 URL: http://192.168.1.162:5000/api/187/requests?page=1&pageSize=5&employeeId=1
+I/flutter (13063): 🚀 جلب الطلبات المعلقة للموافقة...
+I/flutter (13063): 🔗 URL: http://192.168.1.162:5000/api/187/approvals?approverId=1
+I/flutter (13063): 🚀 جلب الطلبات...
+I/flutter (13063): 🔗 URL: http://192.168.1.162:5000/api/187/requests?page=1&pageSize=50&employeeId=1
+I/flutter (13063): 🚀 جلب حالة الحضور للموظف...
+I/flutter (13063): 👤 EmployeeID: 1
+I/flutter (13063): 🔗 URL: http://192.168.1.162:5000/api/187/attendance/status/1
+I/flutter (13063): 🚀 جلب سجل الحضور للموظف...
+I/flutter (13063): 👤 EmployeeNumber: 1
+I/flutter (13063): 🏢 ClientID: 187
+I/flutter (13063): 📅 التاريخ: 2026-03-08
+I/flutter (13063): 📅 التاريخ الكامل: 2026-03-08 15:22:23.759457
+I/flutter (13063): 🔗 URL: http://192.168.1.162:5000/api/187/attendance/employee/1?date=2026-03-08
+I/flutter (13063): 🔗 Base URL: http://192.168.1.162:5000
+I/Choreographer(13063): Skipped 172 frames!  The application may be doing too much work on its main thread.
+D/ProfileInstaller(13063): Installing profile for com.example.mtzhr
+D/mali_gralloc(13063): register: id=4a1000128b3, handle=0xb400006f47306140, importpid=13063
+I/flutter (13063): 📡 Response Status Code: 200
+I/flutter (13063): 📄 Response Body: {"Success":true,"Data":[{"ID":3005,"RequestNumber":"M20260212091805","RequestTypeName":"بصمة حضور وانصراف","EmployeeID":1,"EmployeeName":"الموظف الاول عدنان","CreatedDate":"2026-02-12","Status":"Approved","Priority":"Normal"},{"ID":2008,"RequestNumber":"O20260211164025","RequestTypeName":"أخرى","EmployeeID":1,"EmployeeName":"الموظف الاول عدنان","CreatedDate":"2026-02-11","Status":"مرفوض","Priority":"Normal"},{"ID":2007,"RequestNumber":"M20260211162938","RequestTypeName":"بصمة حضور وانصراف","EmployeeID":1,"EmployeeName":"الموظف الاول عدنان","CreatedDate":"2026-02-11","Status":"Approved","Priority":"Normal"},{"ID":2006,"RequestNumber":"M20260211155738","RequestTypeName":"بصمة حضور وانصراف","EmployeeID":1,"EmployeeName":"الموظف الاول عدنان","CreatedDate":"2026-02-11","Status":"مرفوض","Priority":"Normal"},{"ID":15,"RequestNumber":"L20260209143512","RequestTypeName":"إج�
+I/flutter (13063): ✅ تم جلب الطلبات بنجاح
+I/flutter (13063): 📡 Response Status Code: 200
+I/flutter (13063): 📄 Response Body: {"Success":true,"Data":[{"ID":3005,"RequestNumber":"M20260212091805","RequestTypeName":"بصمة حضور وانصراف","EmployeeID":1,"EmployeeName":"الموظف الاول عدنان","CreatedDate":"2026-02-12","Status":"Approved","Priority":"Normal"},{"ID":2008,"RequestNumber":"O20260211164025","RequestTypeName":"أخرى","EmployeeID":1,"EmployeeName":"الموظف الاول عدنان","CreatedDate":"2026-02-11","Status":"مرفوض","Priority":"Normal"},{"ID":2007,"RequestNumber":"M20260211162938","RequestTypeName":"بصمة حضور وانصراف","EmployeeID":1,"EmployeeName":"الموظف الاول عدنان","CreatedDate":"2026-02-11","Status":"Approved","Priority":"Normal"},{"ID":2006,"RequestNumber":"M20260211155738","RequestTypeName":"بصمة حضور وانصراف","EmployeeID":1,"EmployeeName":"الموظف الاول عدنان","CreatedDate":"2026-02-11","Status":"مرفوض","Priority":"Normal"},{"ID":15,"RequestNumber":"L20260209143512","RequestTypeName":"إج�
+I/flutter (13063): ✅ تم جلب الطلبات بنجاح
+I/flutter (13063): 📡 Response Status Code: 200
+I/flutter (13063): 📡 Response Headers: {access-control-allow-headers: Content-Type, Authorization, x-powered-by: ASP.NET, cache-control: no-cache, date: Sun, 08 Mar 2026 12:22:26 GMT, access-control-allow-origin: *, access-control-allow-methods: GET, POST, PUT, DELETE, OPTIONS, content-length: 109, x-aspnet-version: 4.0.30319, pragma: no-cache, content-type: application/json; charset=utf-8, server: Microsoft-IIS/10.0, expires: -1}
+I/flutter (13063): 📡 Response Body: {"Success":true,"Message":"تم جلب بيانات الحضور بنجاح","Attendances":[],"TotalCount":0}
+I/flutter (13063): 📡 Response Body Length: 87
+I/flutter (13063): ✅ تم جلب سجل الحضور بنجاح
+I/flutter (13063): ✅ نوع البيانات المحللة: _Map<String, dynamic>
+I/flutter (13063): ✅ محتوى البيانات: {Success: true, Message: تم جلب بيانات الحضور بنجاح, Attendances: [], TotalCount: 0}
+I/flutter (13063): ✅ البيانات هي Map
+I/flutter (13063): ✅ مفاتيح البيانات: [Success, Message, Attendances, TotalCount]
+I/flutter (13063): ✅ محتوى Attendances: []
+I/flutter (13063): ✅ نوع Attendances: List<dynamic>
+I/flutter (13063): 📡 Response Status Code: 200
+I/flutter (13063): 📄 Response Body: {"Success":true,"Message":"تم جلب حالة الحضور بنجاح","Status":{"EmployeeNumber":"1","HasCheckedIn":false,"HasCheckedOut":false,"Status":"لم يسجل الحضور","LastUpdate":"2026-03-08T15:22:26.1183675+03:00"}}
+I/flutter (13063): ✅ تم جلب حالة الحضور بنجاح
+I/flutter (13063): 📡 Response Status Code: 200
+I/flutter (13063): 📄 Response Body: {"Success":true,"Data":[{"RequestID":3017,"RequestNumber":"L20260307123956","RequestTypeName":"إجازة","EmployeeName":"مهند السقاف","CreatedDate":"2026-03-07","Approvers":"الموظف الاول عدنان, الموظف الثاني محمد","Status":"Pending"}],"Pagination":{"Page":1,"PageSize":20,"TotalCount":1,"TotalPages":1}}
+I/flutter (13063): ✅ تم جلب الطلبات المعلقة بنجاح
+I/flutter (13063): 📡 Response Status Code: 200
+I/flutter (13063): 📄 Response Body: {"ID":48,"EmployeeID":1,"Name":"الموظف الاول عدنان","Mail":"alskafahmed720@gmail.com","Rules":"Approver","DatabaseName":"HR_187_ديمو","IsActive":true,"ClientID":187,"ModifiedDate":"2026-02-21T23:55:09.97","EmployeeNumber":"1","FirstName":"الموظف الاول","MiddleName":"احمد","LastName":"عدنان","FirstNameEn":"firstEmpy","MiddleNameEn":"ahmed","LastNameEn":"ADNAN","NationalID":"54545454","NationalIDIssueDate":"2026-01-26T00:00:00","NationalIDExpiryDate":"2026-02-26T00:00:00","PassportNumber":"67878648","PassportIssueDate":"2026-01-26T00:00:00","PassportExpiryDate":"2026-02-26T00:00:00","NationalityID":187,"BirthDate":"2001-01-15T00:00:00","Gender":"M","MaritalStatus":"Single","MobileNumber":"","Email":"AHMED@GMAIL.COM","Address":"","City":"","ContractStartDate":"2026-01-26T00:00:00","ContractEndDate":"2026-01-26T00:00:00","HireDate":"2026-02-26T00:00:00","DepartmentID":2,"DepartmentName":"التسويق","PositionID":"7","PositionName":"7","Qualification
+I/flutter (13063): ✅ تم جلب معلومات الموظف الكاملة بنجاح
+W/WindowOnBackDispatcher(13063): OnBackInvokedCallback is not enabled for the application.
+W/WindowOnBackDispatcher(13063): Set 'android:enableOnBackInvokedCallback="true"' in the application manifest.
+W/m.example.mtzhr(13063): userfaultfd: MOVE ioctl seems unsupported: Connection timed out
+I/m.example.mtzhr(13063): Background concurrent mark compact GC freed 3136KB AllocSpace bytes, 10(240KB) LOS objects, 66% free, 3374KB/10123KB, paused 381us,6.535ms total 54.227ms
+D/os.LiceInfo(13063): instance successfully. com.transsion.message.bank.v1.MessageBankLice@e7563 from com.transsion.message.bank.IMessageBankLice
+D/TextSelection(13063): call hasMessage cause invalidateCache
+D/os.SingleLice(13063): instance successfully. com.transsion.dragdrop.v1.DragDropLice@de904bf from com.transsion.dragdrop.DragDropLiceFactory
+D/os.SingleLiceFactory(13063): instance successfully. com.transsion.dragdrop.v1.DragDropLice@de904bf from android.view.IViewLice
+D/os.LiceInfo(13063): instance successfully. com.transsion.view.ViewLice@663678c from android.view.IViewLice
+D/TextSelection(13063): onUseCache cache=false
+I/flutter (13063): 🚀 جلب معلومات الموظف الكاملة...
+I/flutter (13063): 👤 البريد الإلكتروني: alskafahmed720@gmail.com
+I/flutter (13063): 🏢 ClientID: 187
+I/flutter (13063): 🔗 URL: http://192.168.1.162:5000/api/employee-full-info/187/get
+I/flutter (13063): 📦 Request Body: {"Email":"alskafahmed720@gmail.com"}
+I/flutter (13063): 🚀 جلب الطلبات...
+I/flutter (13063): 🔗 URL: http://192.168.1.162:5000/api/187/requests?page=1&pageSize=5&employeeId=1
+I/flutter (13063): 🚀 جلب الطلبات المعلقة للموافقة...
+I/flutter (13063): 🔗 URL: http://192.168.1.162:5000/api/187/approvals?approverId=1
+I/flutter (13063): 🚀 جلب الطلبات...
+I/flutter (13063): 🔗 URL: http://192.168.1.162:5000/api/187/requests?page=1&pageSize=50&employeeId=1
+I/flutter (13063): 🚀 جلب حالة الحضور للموظف...
+I/flutter (13063): 👤 EmployeeID: 1
+I/flutter (13063): 🔗 URL: http://192.168.1.162:5000/api/187/attendance/status/1
+I/flutter (13063): 🚀 جلب سجل الحضور للموظف...
+I/flutter (13063): 👤 EmployeeNumber: 1
+I/flutter (13063): 🏢 ClientID: 187
+I/flutter (13063): 📅 التاريخ: 2026-03-08
+I/flutter (13063): 📅 التاريخ الكامل: 2026-03-08 15:26:23.941791
+I/flutter (13063): 🔗 URL: http://192.168.1.162:5000/api/187/attendance/employee/1?date=2026-03-08
+I/flutter (13063): 🔗 Base URL: http://192.168.1.162:5000
+I/flutter (13063): 📡 Response Status Code: 200
+I/flutter (13063): 📄 Response Body: {"Success":true,"Message":"تم جلب حالة الحضور بنجاح","Status":{"EmployeeNumber":"1","HasCheckedIn":false,"HasCheckedOut":false,"Status":"لم يسجل الحضور","LastUpdate":"2026-03-08T15:26:24.8051819+03:00"}}
+I/flutter (13063): ✅ تم جلب حالة الحضور بنجاح
+I/flutter (13063): 📡 Response Status Code: 200
+I/flutter (13063): 📡 Response Headers: {access-control-allow-headers: Content-Type, Authorization, x-powered-by: ASP.NET, cache-control: no-cache, date: Sun, 08 Mar 2026 12:26:24 GMT, access-control-allow-origin: *, access-control-allow-methods: GET, POST, PUT, DELETE, OPTIONS, content-length: 109, x-aspnet-version: 4.0.30319, pragma: no-cache, content-type: application/json; charset=utf-8, server: Microsoft-IIS/10.0, expires: -1}
+I/flutter (13063): 📡 Response Body: {"Success":true,"Message":"تم جلب بيانات الحضور بنجاح","Attendances":[],"TotalCount":0}
+I/flutter (13063): 📡 Response Body Length: 87
+I/flutter (13063): ✅ تم جلب سجل الحضور بنجاح
+I/flutter (13063): ✅ نوع البيانات المحللة: _Map<String, dynamic>
+I/flutter (13063): ✅ محتوى البيانات: {Success: true, Message: تم جلب بيانات الحضور بنجاح, Attendances: [], TotalCount: 0}
+I/flutter (13063): ✅ البيانات هي Map
+I/flutter (13063): ✅ مفاتيح البيانات: [Success, Message, Attendances, TotalCount]
+I/flutter (13063): ✅ محتوى Attendances: []
+I/flutter (13063): ✅ نوع Attendances: List<dynamic>
+I/flutter (13063): 📡 Response Status Code: 200
+I/flutter (13063): 📄 Response Body: {"Success":true,"Data":[{"ID":3005,"RequestNumber":"M20260212091805","RequestTypeName":"بصمة حضور وانصراف","EmployeeID":1,"EmployeeName":"الموظف الاول عدنان","CreatedDate":"2026-02-12","Status":"Approved","Priority":"Normal"},{"ID":2008,"RequestNumber":"O20260211164025","RequestTypeName":"أخرى","EmployeeID":1,"EmployeeName":"الموظف الاول عدنان","CreatedDate":"2026-02-11","Status":"مرفوض","Priority":"Normal"},{"ID":2007,"RequestNumber":"M20260211162938","RequestTypeName":"بصمة حضور وانصراف","EmployeeID":1,"EmployeeName":"الموظف الاول عدنان","CreatedDate":"2026-02-11","Status":"Approved","Priority":"Normal"},{"ID":2006,"RequestNumber":"M20260211155738","RequestTypeName":"بصمة حضور وانصراف","EmployeeID":1,"EmployeeName":"الموظف الاول عدنان","CreatedDate":"2026-02-11","Status":"مرفوض","Priority":"Normal"},{"ID":15,"RequestNumber":"L20260209143512","RequestTypeName":"إج�
+I/flutter (13063): ✅ تم جلب الطلبات بنجاح
+I/flutter (13063): 📡 Response Status Code: 200
+I/flutter (13063): 📄 Response Body: {"Success":true,"Data":[{"ID":3005,"RequestNumber":"M20260212091805","RequestTypeName":"بصمة حضور وانصراف","EmployeeID":1,"EmployeeName":"الموظف الاول عدنان","CreatedDate":"2026-02-12","Status":"Approved","Priority":"Normal"},{"ID":2008,"RequestNumber":"O20260211164025","RequestTypeName":"أخرى","EmployeeID":1,"EmployeeName":"الموظف الاول عدنان","CreatedDate":"2026-02-11","Status":"مرفوض","Priority":"Normal"},{"ID":2007,"RequestNumber":"M20260211162938","RequestTypeName":"بصمة حضور وانصراف","EmployeeID":1,"EmployeeName":"الموظف الاول عدنان","CreatedDate":"2026-02-11","Status":"Approved","Priority":"Normal"},{"ID":2006,"RequestNumber":"M20260211155738","RequestTypeName":"بصمة حضور وانصراف","EmployeeID":1,"EmployeeName":"الموظف الاول عدنان","CreatedDate":"2026-02-11","Status":"مرفوض","Priority":"Normal"},{"ID":15,"RequestNumber":"L20260209143512","RequestTypeName":"إج�
+I/flutter (13063): ✅ تم جلب الطلبات بنجاح
+I/flutter (13063): 📡 Response Status Code: 200
+I/flutter (13063): 📄 Response Body: {"Success":true,"Data":[{"RequestID":3017,"RequestNumber":"L20260307123956","RequestTypeName":"إجازة","EmployeeName":"مهند السقاف","CreatedDate":"2026-03-07","Approvers":"الموظف الاول عدنان, الموظف الثاني محمد","Status":"Pending"}],"Pagination":{"Page":1,"PageSize":20,"TotalCount":1,"TotalPages":1}}
+I/flutter (13063): ✅ تم جلب الطلبات المعلقة بنجاح
+I/flutter (13063): 📡 Response Status Code: 200
+I/flutter (13063): 📄 Response Body: {"ID":48,"EmployeeID":1,"Name":"الموظف الاول عدنان","Mail":"alskafahmed720@gmail.com","Rules":"Approver","DatabaseName":"HR_187_ديمو","IsActive":true,"ClientID":187,"ModifiedDate":"2026-02-21T23:55:09.97","EmployeeNumber":"1","FirstName":"الموظف الاول","MiddleName":"احمد","LastName":"عدنان","FirstNameEn":"firstEmpy","MiddleNameEn":"ahmed","LastNameEn":"ADNAN","NationalID":"54545454","NationalIDIssueDate":"2026-01-26T00:00:00","NationalIDExpiryDate":"2026-02-26T00:00:00","PassportNumber":"67878648","PassportIssueDate":"2026-01-26T00:00:00","PassportExpiryDate":"2026-02-26T00:00:00","NationalityID":187,"BirthDate":"2001-01-15T00:00:00","Gender":"M","MaritalStatus":"Single","MobileNumber":"","Email":"AHMED@GMAIL.COM","Address":"","City":"","ContractStartDate":"2026-01-26T00:00:00","ContractEndDate":"2026-01-26T00:00:00","HireDate":"2026-02-26T00:00:00","DepartmentID":2,"DepartmentName":"التسويق","PositionID":"7","PositionName":"7","Qualification
+I/flutter (13063): ✅ تم جلب معلومات الموظف الكاملة بنجاح
+D/TextSelection(13063): onUseCache cache=false
+I/flutter (13063): 🔍 BiometricService: التحقق من توفر البصمة...
+I/flutter (13063): 🔍 BiometricService: canCheckBiometrics: true
+W/WindowOnBackDispatcher(13063): OnBackInvokedCallback is not enabled for the application.
+W/WindowOnBackDispatcher(13063): Set 'android:enableOnBackInvokedCallback="true"' in the application manifest.
+I/flutter (13063): 🔍 BiometricService: isDeviceSupported: true
+I/flutter (13063): 🔍 BiometricService: النتيجة النهائية: true
+I/flutter (13063): 🔍 BiometricService: جلب أنواع البصمة المتوفرة...
+I/flutter (13063): 🔍 BiometricService: أنواع البصمة المتوفرة: [BiometricType.weak, BiometricType.strong]
+D/TextSelection(13063): onUseCache cache=false
+D/TextSelection(13063): onUseCache cache=false
+D/TextSelection(13063): onUseCache cache=false
+D/TextSelection(13063): onUseCache cache=false
+D/TextSelection(13063): onUseCache cache=false
+D/TextSelection(13063): onUseCache cache=false
+D/TextSelection(13063): onUseCache cache=false
+D/TextSelection(13063): onUseCache cache=false
+I/flutter (13063): 🔄 [AttendanceScreen] 🚀 بدء عملية الحضور
+I/flutter (13063): 🔄 [AttendanceScreen] ✅ أذونات الموقع مفعلة بنجاح
+I/flutter (13063): 🔄 [AttendanceScreen] 📍 تم تحديث الموقع: 21.5171521, 39.2136709
+I/flutter (13063): 🔄 [AttendanceScreen] 📍 تم تحديث الموقع: 21.5171521, 39.2136709
+D/TextSelection(13063): onUseCache cache=false
+I/flutter (13063): 🔄 [AttendanceScreen] 🚀 بدء عملية الحضور
+I/flutter (13063): 🔄 [AttendanceScreen] ✅ أذونات الموقع مفعلة بنجاح
+I/flutter (13063): 🔄 [AttendanceScreen] 📍 تم تحديث الموقع: 21.5171521, 39.2136709
+D/TextSelection(13063): onUseCache cache=false
+D/TextSelection(13063): onUseCache cache=false
+D/TextSelection(13063): onUseCache cache=false
+D/TextSelection(13063): onUseCache cache=false
+D/TextSelection(13063): onUseCache cache=false
+I/flutter (13063): 🚀 جلب تفاصيل الراتب...
+I/flutter (13063): 👤 EmployeeID: 1
+I/flutter (13063): 📅 التاريخ: 3/2026
+I/flutter (13063): 🔗 URL: http://192.168.1.162:5000/api/187/payroll/details/1?month=3&year=2026
+W/WindowOnBackDispatcher(13063): OnBackInvokedCallback is not enabled for the application.
+W/WindowOnBackDispatcher(13063): Set 'android:enableOnBackInvokedCallback="true"' in the application manifest.
+I/flutter (13063): 📡 Response Status Code: 200
+I/flutter (13063): 📄 Response Body: {"success":true,"data":{"basicSalary":5000.0,"additions":[{"nameAr":"بدل سكن","nameEn":"Housing Allowance","amount":600.0},{"nameAr":"بدل معيشة","nameEn":"Living Allowance","amount":1000.0}],"deductions":[{"nameAr":"Loan","nameEn":"Loan","amount":2500.0},{"nameAr":"Loan","nameEn":"Loan","amount":1000.0},{"nameAr":"Loan","nameEn":"Loan","amount":2.0},{"nameAr":"Loan","nameEn":"Loan","amount":1711.0},{"nameAr":"Loan","nameEn":"Loan","amount":250.0},{"nameAr":"Loan","nameEn":"Loan","amount":200.0},{"nameAr":"Loan","nameEn":"Loan","amount":845.0}],"totalAdditions":1600.0,"totalDeductions":6508.0,"netSalary":92.0,"month":"3","year":"2026"}}
+I/flutter (13063): ✅ تم جلب تفاصيل الراتب بنجاح
+D/TextSelection(13063): onUseCache cache=false
+D/VRI[MainActivity](13063): visibilityChanged oldVisibility=true newVisibility=false
+D/mali_gralloc(13063): unregister: id=4a1000128ae, handle=0xb400006e34c034e0, base=0x0, importpid=13063, clone_count=0
+D/mali_gralloc(13063): unregister: id=4a1000128af, handle=0xb400006e34c03860, base=0x0, importpid=13063, clone_count=0
+D/mali_gralloc(13063): unregister: id=4a1000128b1, handle=0xb400006e34c03a20, base=0x0, importpid=13063, clone_count=0
+D/mali_gralloc(13063): unregister: id=4a1000128b2, handle=0xb400006e34c03b00, base=0x0, importpid=13063, clone_count=0
+D/mali_gralloc(13063): unregister: id=4a1000128b0, handle=0xb400006e34c03940, base=0x0, importpid=13063, clone_count=0
+I/HWUI    (13063): [destroy] CanvasContext will be destroyed.
+D/mali_gralloc(13063): unregister: id=4a1000128b3, handle=0xb400006f47306140, base=0x0, importpid=13063, clone_count=0
+I/HWUI    (13063): [setStopped] CanvasContext will be destroyed.
+D/LogUtil (13063): mLogd_enable
+Lost connection to device.

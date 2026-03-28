@@ -1,0 +1,60 @@
+#include "Generated.xcconfig"
+
+// Custom debug build configuration
+// Optimized for debugging and development
+
+// Disable bitcode for debug builds
+ENABLE_BITCODE = NO
+
+// Minimal optimization for faster debug builds
+GCC_OPTIMIZATION_LEVEL = 0
+
+// Disable link time optimization for faster builds
+GCC_LTO_ENABLED = NO
+
+// Disable dead code stripping for debug builds
+DEAD_CODE_STRIPPING = NO
+
+// Enable arm64 for simulator
+EXCLUDED_ARCHS[sdk=iphonesimulator*] = 
+
+// Set deployment target
+IPHONEOS_DEPLOYMENT_TARGET = 12.0
+
+// Enable modular headers
+CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES = YES
+
+// Set Swift version
+SWIFT_VERSION = 5.0
+
+// Enable code signing
+CODE_SIGNING_REQUIRED = YES
+CODE_SIGNING_ALLOWED = YES
+
+// Enable automatic signing
+CODE_SIGN_STYLE = Automatic
+
+// Set minimum deployment target for macOS
+MACOSX_DEPLOYMENT_TARGET = 10.15
+
+// Debug environment definitions
+GCC_PREPROCESSOR_DEFINITIONS = $(inherited) DEBUG=1 CUSTOM_DEBUG=1
+
+// Enable debug symbols
+DEBUG_INFORMATION_FORMAT = dwarf-with-dsym
+
+// Enable runtime checks
+GCC_ENABLE_STRICT_OVERFLOW_CHECKING = YES
+
+// Enable additional warnings for debugging
+GCC_WARN_ABOUT_RETURN_TYPE = YES
+GCC_WARN_ABOUT_UNINITIALIZED_AUTOS = YES
+
+// Enable debug logging
+GCC_ENABLE_DEBUG_LOGGING = YES
+
+// Custom debug flags
+OTHER_CFLAGS = $(inherited) -DDEBUG_FLAG=1
+
+// Custom debug linker flags
+OTHER_LDFLAGS = $(inherited) -Wl,-debug 
