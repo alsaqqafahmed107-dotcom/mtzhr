@@ -1,7 +1,8 @@
-# 1. تحديد إصدار المنصة (يجب أن يكون 13.0 أو أعلى لدعم معظم المكتبات الحديثة)
+# تحديث المصدر لضمان جلب أحدث المواصفات للمكتبات
+source 'https://github.com/CocoaPods/Specs.git'
+
 platform :ios, '15.5'
 
-# إعدادات Flutter الافتراضية لتعطيل الإحصائيات وتسريع البناء
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
 
 project 'Runner', {
@@ -10,7 +11,6 @@ project 'Runner', {
   'Release' => :release,
 }
 
-# دالة لتحديد مسار Flutter الأساسي (لا تقم بتعديلها)
 def flutter_root
   generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
   unless File.exist?(generated_xcode_build_settings_path)
@@ -24,34 +24,28 @@ def flutter_root
   raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run flutter pub get"
 end
 
-# ربط ملفات Flutter المساعدة بالـ Podfile
 require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
 
 flutter_ios_podfile_setup
 
-# --- القسم الأساسي لربط مكتبات المشروع (Target) ---
 target 'Runner' do
   use_frameworks!
   use_modular_headers!
 
-  # تثبيت جميع مكتبات Flutter (Plugins) - هذا السطر يحل مشكلة Module not found
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 end
 
-# --- قسم الإصلاحات البرمجية بعد التثبيت (Post Install Hooks) ---
 post_install do |installer|
   installer.pods_project.targets.each do |target|
-    # استدعاء إعدادات Flutter الإضافية
     flutter_additional_ios_build_settings(target)
     
     target.build_configurations.each do |config|
-      # 1. حل مشكلة تعارض المعمارية للمحاكي (لحل مشكلة MLImage و Appetize.io)
+      # استبعاد arm64 للمحاكي لضمان العمل على Appetize.io
       config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64'
       
-      # 2. توحيد إصدار التوافق لجميع المكتبات لمنع تضارب الإصدارات
+      # توحيد إصدار النظام لجميع الـ Pods
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.5'
       
-      # 3. إعدادات الاستقرار ومنع أخطاء Xcode الشائعة
       config.build_settings['ENABLE_BITCODE'] = 'NO'
       config.build_settings['SWIFT_VERSION'] = '5.0'
       config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
