@@ -636,6 +636,13 @@ class Translations {
       'request_saved_successfully': 'تم حفظ الطلب بنجاح',
       'select_attachment': 'اختر المرفق',
       'manual_punch_request': 'بصمة حضور وانصراف',
+      'create_request': 'إنشاء طلب',
+      'employee_info': 'معلومات الموظف',
+      'no_pending_requests': 'لا توجد طلبات معلقة',
+      'no_approvals': 'لا توجد موافقات معلقة',
+      'no_rejected_requests': 'لا توجد طلبات مرفوضة',
+      'no_approved_requests': 'لا توجد طلبات معتمدة',
+      'no_requests': 'لا توجد طلبات',
     },
     'en': {
       // Login Page
@@ -1270,6 +1277,13 @@ class Translations {
       'confirm_rejection_msg': 'Are you sure you want to reject the request?',
       'auto_execute_info':
           'The request will be executed automatically if you are the last approver in the workflow',
+      'create_request': 'Create Request',
+      'employee_info': 'Employee Information',
+      'no_pending_requests': 'No pending requests',
+      'no_approvals': 'No pending approvals',
+      'no_rejected_requests': 'No rejected requests',
+      'no_approved_requests': 'No approved requests',
+      'no_requests': 'No requests',
     },
   };
 

@@ -7,6 +7,7 @@ import '../models/api_models.dart' as api_models;
 import '../models/pending_counts.dart';
 import '../models/request.dart' as request_models;
 import '../models/employee_full_info.dart';
+import '../models/shift.dart';
 
 import '../services/api_service.dart';
 import '../services/language_service.dart';
@@ -44,6 +45,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, dynamic> _attendanceStats = {};
   List<String> expiryNotifications = [];
   EmployeeFullInfo? employeeFullInfo;
+  List<ShiftData> _shifts = [];
+  DateTime _calendarMonth = DateTime(DateTime.now().year, DateTime.now().month);
 
   // Dashboard Data
   List<request_models.EmployeeRequest> _recentRequests = [];
@@ -61,6 +64,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   bool _hasShownExpiryWarning = false;
+
+  ShiftData? get _currentShift {
+    if (_shifts.isEmpty) return null;
+    final active = _shifts.where((s) => s.isActive).toList();
+    return active.isNotEmpty ? active.first : _shifts.first;
+  }
 
   @override
   void initState() {
@@ -161,6 +170,13 @@ class _HomeScreenState extends State<HomeScreen> {
           _log('Error fetching my pending count: $e');
           return {'Success': false, 'Data': []};
         }),
+
+        // 6. Shifts (to compute working days)
+        ApiService.getEmployeeShiftsAll(clientId, widget.employeeData!.employeeNumber)
+            .catchError((e) {
+          _log('Error fetching shifts: $e');
+          return <ShiftData>[];
+        }),
       ]);
 
       if (!mounted) return;
@@ -214,6 +230,8 @@ class _HomeScreenState extends State<HomeScreen> {
         } else {
           _myPendingRequestsCount = 0;
         }
+
+        _shifts = (results[6] as List).whereType<ShiftData>().toList();
 
         _isLoadingDashboard = false;
       });
@@ -546,6 +564,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 _buildAttendanceCard(lang),
                 const SizedBox(height: 24),
                 _buildQuickActions(lang),
+                const SizedBox(height: 24),
+                _buildWorkCalendar(lang),
                 const SizedBox(height: 24),
                 _buildRecentRequestsCard(lang),
                 const SizedBox(height: 24),
@@ -895,6 +915,278 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+  Widget _buildWorkCalendar(String lang) {
+    final scheme = Theme.of(context).colorScheme;
+    final semantic = Theme.of(context).extension<AppSemanticColors>();
+    if (semantic == null) return const SizedBox();
+
+    final month = _calendarMonth;
+    final firstOfMonth = DateTime(month.year, month.month, 1);
+    final daysInMonth = DateUtils.getDaysInMonth(month.year, month.month);
+    final startOffset = _weekdayIndexSundayFirst(firstOfMonth);
+    final now = DateTime.now();
+
+    String monthKey(int m) {
+      const keys = [
+        'january',
+        'february',
+        'march',
+        'april',
+        'may',
+        'june',
+        'july',
+        'august',
+        'september',
+        'october',
+        'november',
+        'december',
+      ];
+      return keys[m - 1];
+    }
+
+    final title = '${Translations.getText(monthKey(month.month), lang)} ${month.year}';
+    final workBg = semantic.success.withValues(alpha: 0.12);
+    final offBg = scheme.error.withValues(alpha: 0.12);
+    final unknownBg = scheme.surfaceContainerHighest;
+
+    final headers = const ['أحد', 'إثنين', 'ثلاثاء', 'أربعاء', 'خميس', 'جمعة', 'سبت'];
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'التقويم',
+                    style: Theme.of(context)
+                        .textTheme
+                        .headlineSmall
+                        ?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () {
+                    setState(() {
+                      _calendarMonth = DateTime(_calendarMonth.year, _calendarMonth.month - 1);
+                    });
+                  },
+                  icon: const Icon(Icons.chevron_left),
+                ),
+                Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                IconButton(
+                  onPressed: () {
+                    setState(() {
+                      _calendarMonth = DateTime(_calendarMonth.year, _calendarMonth.month + 1);
+                    });
+                  },
+                  icon: const Icon(Icons.chevron_right),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: headers
+                  .map(
+                    (h) => Expanded(
+                      child: Center(
+                        child: Text(
+                          h,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: scheme.onSurfaceVariant,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                  .toList(),
+            ),
+            const SizedBox(height: 10),
+            GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 7,
+                crossAxisSpacing: 8,
+                mainAxisSpacing: 8,
+                childAspectRatio: 1.0,
+              ),
+              itemCount: 42,
+              itemBuilder: (context, index) {
+                final dayNumber = index - startOffset + 1;
+                if (dayNumber < 1 || dayNumber > daysInMonth) {
+                  return const SizedBox.shrink();
+                }
+
+                final date = DateTime(month.year, month.month, dayNumber);
+                final isToday = DateUtils.isSameDay(date, now);
+                final isWorking = _isWorkingDate(date);
+                final bg = isWorking == null
+                    ? unknownBg
+                    : (isWorking ? workBg : offBg);
+                final fg = isWorking == null
+                    ? scheme.onSurfaceVariant
+                    : (isWorking ? semantic.success : scheme.error);
+
+                return Container(
+                  decoration: BoxDecoration(
+                    color: bg,
+                    borderRadius: BorderRadius.circular(12),
+                    border: isToday
+                        ? Border.all(color: scheme.primary, width: 2)
+                        : Border.all(color: scheme.outlineVariant),
+                  ),
+                  child: Center(
+                    child: Text(
+                      dayNumber.toString(),
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: fg,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              children: [
+                _legendChip(color: semantic.success, label: Translations.getText('status_working', lang)),
+                _legendChip(color: scheme.error, label: Translations.getText('status_holiday', lang)),
+                _legendChip(color: scheme.primary, label: 'اليوم', outlined: true),
+              ],
+            ),
+            if (_currentShift == null) ...[
+              const SizedBox(height: 12),
+              Text(
+                Translations.getText('no_work_days', lang),
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  int _weekdayIndexSundayFirst(DateTime date) {
+    return date.weekday % 7;
+  }
+
+  bool? _isWorkingDate(DateTime date) {
+    final shift = _currentShift;
+    if (shift == null) return null;
+    final days = shift.workDays;
+    if (days.isEmpty) return null;
+
+    int? sundayNumber;
+    for (final d in days) {
+      final n = _normalizeDayName(d.dayName);
+      if (n.contains('sun') || n.contains('الاحد') || n == 'احد') {
+        sundayNumber = d.dayNumber;
+        break;
+      }
+    }
+
+    final mappedDayNumber = _mapDateToShiftDayNumber(date, sundayNumber);
+    for (final d in days) {
+      if (d.dayNumber == mappedDayNumber) {
+        return d.isWorkDay;
+      }
+    }
+
+    final dateName = _weekdayNameKey(date.weekday);
+    for (final d in days) {
+      final n = _normalizeDayName(d.dayName);
+      if (n.contains(dateName)) {
+        return d.isWorkDay;
+      }
+    }
+
+    return null;
+  }
+
+  int _mapDateToShiftDayNumber(DateTime date, int? sundayNumber) {
+    if (sundayNumber == 1) {
+      return date.weekday == DateTime.sunday ? 1 : date.weekday + 1;
+    }
+    return date.weekday;
+  }
+
+  String _weekdayNameKey(int weekday) {
+    switch (weekday) {
+      case DateTime.monday:
+        return 'mon';
+      case DateTime.tuesday:
+        return 'tue';
+      case DateTime.wednesday:
+        return 'wed';
+      case DateTime.thursday:
+        return 'thu';
+      case DateTime.friday:
+        return 'fri';
+      case DateTime.saturday:
+        return 'sat';
+      case DateTime.sunday:
+        return 'sun';
+    }
+    return '';
+  }
+
+  String _normalizeDayName(String value) {
+    final v = value.trim().toLowerCase();
+    return v
+        .replaceAll('أ', 'ا')
+        .replaceAll('إ', 'ا')
+        .replaceAll('آ', 'ا')
+        .replaceAll('ة', 'ه');
+  }
+
+  Widget _legendChip({
+    required Color color,
+    required String label,
+    bool outlined = false,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: outlined ? scheme.surface : color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: outlined ? color : Colors.transparent),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              color: outlined ? color : scheme.onSurface,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
 
   Widget _buildRecentRequestsCard(String lang) {
     final scheme = Theme.of(context).colorScheme;

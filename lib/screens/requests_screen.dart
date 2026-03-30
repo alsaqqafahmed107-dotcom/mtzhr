@@ -26,11 +26,25 @@ class _RequestsScreenState extends State<RequestsScreen> {
   bool _isLoading = true;
   bool _hasError = false;
   String _errorMessage = '';
+  static const String _allRequestTypeLabel = 'الكل';
+  List<api_models.RequestType> _availableRequestTypes = [];
+  List<String> _requestTypeOptions = [_allRequestTypeLabel];
+  String _selectedRequestTypeText = _allRequestTypeLabel;
+  bool _isLoadingRequestTypes = false;
+  _RequestSort _sort = _RequestSort.newestFirst;
+  final TextEditingController _searchController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    _loadRequestTypes();
     _loadRequests();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadRequests() async {
@@ -44,6 +58,7 @@ class _RequestsScreenState extends State<RequestsScreen> {
       final requests = await _fetchRequestsFromAPI();
       setState(() {
         _requests = requests;
+        _syncRequestTypeOptions();
         _isLoading = false;
       });
     } catch (e) {
@@ -52,6 +67,64 @@ class _RequestsScreenState extends State<RequestsScreen> {
         _errorMessage = 'حدث خطأ في تحميل الطلبات: $e';
         _isLoading = false;
       });
+    }
+  }
+
+  Future<void> _loadRequestTypes() async {
+    setState(() {
+      _isLoadingRequestTypes = true;
+    });
+
+    try {
+      final types =
+          await ApiService.getRequestTypes(widget.employeeData.clientID);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _availableRequestTypes = types;
+        _syncRequestTypeOptions();
+        _isLoadingRequestTypes = false;
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _availableRequestTypes = [];
+        _syncRequestTypeOptions();
+        _isLoadingRequestTypes = false;
+      });
+    }
+  }
+
+  void _syncRequestTypeOptions() {
+    final unique = <String>{_allRequestTypeLabel};
+
+    for (final t in _availableRequestTypes) {
+      final text = t.text.trim();
+      if (text.isNotEmpty) {
+        unique.add(text);
+      }
+    }
+
+    for (final r in _requests) {
+      final title = r.title.trim();
+      if (title.isNotEmpty) {
+        unique.add(title);
+      }
+    }
+
+    final options = unique.toList();
+    options.remove(_allRequestTypeLabel);
+    options.sort((a, b) => a.compareTo(b));
+    options.insert(0, _allRequestTypeLabel);
+
+    _requestTypeOptions = options;
+    if (!_requestTypeOptions.contains(_selectedRequestTypeText)) {
+      _selectedRequestTypeText = _allRequestTypeLabel;
     }
   }
 
@@ -71,7 +144,7 @@ class _RequestsScreenState extends State<RequestsScreen> {
       }
     } catch (e) {
       // في حالة فشل API، نرجع قائمة فارغة
-      print('فشل في جلب الطلبات من API: $e');
+      debugPrint('فشل في جلب الطلبات من API: $e');
       return [];
     }
   }
@@ -126,8 +199,45 @@ class _RequestsScreenState extends State<RequestsScreen> {
     }
   }
 
+  List<request_models.EmployeeRequest> _getFilteredRequests() {
+    final query = _searchController.text.trim().toLowerCase();
+    final selectedType = _selectedRequestTypeText.trim().toLowerCase();
+
+    final filtered = _requests.where((r) {
+      if (selectedType.isNotEmpty &&
+          selectedType != _allRequestTypeLabel.toLowerCase()) {
+        if (r.title.trim().toLowerCase() != selectedType) {
+          return false;
+        }
+      }
+
+      if (query.isEmpty) {
+        return true;
+      }
+
+      final statusText = _getStatusText(r.status).toLowerCase();
+      return r.requestNumber.toLowerCase().contains(query) ||
+          r.employeeName.toLowerCase().contains(query) ||
+          r.title.toLowerCase().contains(query) ||
+          statusText.contains(query);
+    }).toList();
+
+    filtered.sort((a, b) {
+      switch (_sort) {
+        case _RequestSort.newestFirst:
+          return b.createdAt.compareTo(a.createdAt);
+        case _RequestSort.oldestFirst:
+          return a.createdAt.compareTo(b.createdAt);
+      }
+    });
+
+    return filtered;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final filteredRequests = _getFilteredRequests();
+
     return Scaffold(
       appBar: AppBar(
         title: Text(Translations.getText('my_requests', Provider.of<LanguageService>(context).currentLocale.languageCode)),
@@ -136,7 +246,10 @@ class _RequestsScreenState extends State<RequestsScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loadRequests,
+            onPressed: () {
+              _loadRequestTypes();
+              _loadRequests();
+            },
           ),
           IconButton(
             icon: const Icon(Icons.add),
@@ -158,11 +271,11 @@ class _RequestsScreenState extends State<RequestsScreen> {
           ),
         ],
       ),
-      body: _buildBody(),
+      body: _buildBody(filteredRequests),
     );
   }
 
-  Widget _buildBody() {
+  Widget _buildBody(List<request_models.EmployeeRequest> filteredRequests) {
     if (_isLoading) {
       return Center(
         child: Column(
@@ -216,45 +329,219 @@ class _RequestsScreenState extends State<RequestsScreen> {
     }
 
     if (_requests.isEmpty) {
-      return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.assignment,
-              size: 100,
-              color: Colors.grey,
-            ),
-            SizedBox(height: 16),
-            Text(
-              'لا توجد طلبات',
-              style: TextStyle(
-                fontSize: 18,
-                color: Colors.grey,
+      return Column(
+        children: [
+          _buildFixedFilterBar(),
+          const Expanded(
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.assignment,
+                    size: 100,
+                    color: Colors.grey,
+                  ),
+                  SizedBox(height: 16),
+                  Text(
+                    'لا توجد طلبات',
+                    style: TextStyle(
+                      fontSize: 18,
+                      color: Colors.grey,
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'اضغط على زر + لإنشاء طلب جديد',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey,
+                    ),
+                  ),
+                ],
               ),
             ),
-            SizedBox(height: 8),
-            Text(
-              'اضغط على زر + لإنشاء طلب جديد',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey,
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       );
     }
 
-    return RefreshIndicator(
-      onRefresh: _loadRequests,
-      child: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: _requests.length,
-        itemBuilder: (context, index) {
-          final request = _requests[index];
-          return _buildRequestCard(request);
-        },
+    return Column(
+      children: [
+        _buildFixedFilterBar(),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _loadRequests,
+            child: ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: filteredRequests.length,
+              itemBuilder: (context, index) {
+                final request = filteredRequests[index];
+                return _buildRequestCard(request);
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFixedFilterBar() {
+    return Material(
+      color: Colors.white,
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+        child: Column(
+          children: [
+            TextField(
+              controller: _searchController,
+              onChanged: (_) => setState(() {}),
+              textInputAction: TextInputAction.search,
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search),
+                hintText: 'بحث...',
+                suffixIcon: _searchController.text.trim().isEmpty
+                    ? null
+                    : IconButton(
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() {});
+                        },
+                        icon: const Icon(Icons.close),
+                      ),
+                filled: true,
+                fillColor: Colors.grey[50],
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 12,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Colors.grey[300]!),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: Colors.grey[300]!),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Color(0xFF0EA5E9)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      return DropdownMenu<String>(
+                        width: constraints.maxWidth,
+                        initialSelection: _selectedRequestTypeText,
+                        onSelected: (value) {
+                          if (value == null) {
+                            return;
+                          }
+                          setState(() => _selectedRequestTypeText = value);
+                        },
+                        label: const Text('نوع الطلب'),
+                        leadingIcon: const Icon(Icons.filter_list),
+                        trailingIcon: _isLoadingRequestTypes
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : null,
+                        inputDecorationTheme: InputDecorationTheme(
+                          filled: true,
+                          fillColor: Colors.grey[50],
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: Colors.grey[300]!),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: Colors.grey[300]!),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide:
+                                const BorderSide(color: Color(0xFF0EA5E9)),
+                          ),
+                        ),
+                        dropdownMenuEntries: _requestTypeOptions
+                            .map(
+                              (t) => DropdownMenuEntry<String>(
+                                value: t,
+                                label: t,
+                              ),
+                            )
+                            .toList(),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      return DropdownMenu<_RequestSort>(
+                        width: constraints.maxWidth,
+                        initialSelection: _sort,
+                        onSelected: (value) {
+                          if (value == null) {
+                            return;
+                          }
+                          setState(() => _sort = value);
+                        },
+                        label: const Text('الفرز'),
+                        leadingIcon: const Icon(Icons.sort),
+                        inputDecorationTheme: InputDecorationTheme(
+                          filled: true,
+                          fillColor: Colors.grey[50],
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: Colors.grey[300]!),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide(color: Colors.grey[300]!),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide:
+                                const BorderSide(color: Color(0xFF0EA5E9)),
+                          ),
+                        ),
+                        dropdownMenuEntries: const [
+                          DropdownMenuEntry<_RequestSort>(
+                            value: _RequestSort.newestFirst,
+                            label: 'الأحدث أولاً',
+                          ),
+                          DropdownMenuEntry<_RequestSort>(
+                            value: _RequestSort.oldestFirst,
+                            label: 'الأقدم أولاً',
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -501,7 +788,6 @@ class _RequestsScreenState extends State<RequestsScreen> {
       case request_models.RequestType.other:
         return Icons.assignment;
     }
-    return Icons.assignment; // default return
   }
 
   String _formatDate(DateTime date) {
@@ -523,11 +809,17 @@ class _RequestsScreenState extends State<RequestsScreen> {
     try {
       // جلب تفاصيل الطلب من API
       final details = await _fetchRequestDetails(request.id);
+      if (!mounted) {
+        return;
+      }
       Navigator.of(context).pop(); // إغلاق مؤشر التحميل
 
       // عرض تفاصيل الطلب
       _showRequestDetailsDialog(request, details);
     } catch (e) {
+      if (!mounted) {
+        return;
+      }
       Navigator.of(context).pop(); // إغلاق مؤشر التحميل
       // عرض تفاصيل الطلب بدون معلومات إضافية
       _showRequestDetailsDialog(request, null);
@@ -546,7 +838,7 @@ class _RequestsScreenState extends State<RequestsScreen> {
       }
       return null;
     } catch (e) {
-      print('فشل في جلب تفاصيل الطلب: $e');
+      debugPrint('فشل في جلب تفاصيل الطلب: $e');
       return null;
     }
   }
@@ -887,4 +1179,9 @@ class _RequestsScreenState extends State<RequestsScreen> {
         return 'عادية';
     }
   }
+}
+
+enum _RequestSort {
+  newestFirst,
+  oldestFirst,
 }

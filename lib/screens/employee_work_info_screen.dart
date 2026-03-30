@@ -446,7 +446,7 @@ class _EmployeeWorkInfoScreenState extends State<EmployeeWorkInfoScreen> {
             padding: EdgeInsets.all(20.0),
             child: Row(
               children: [
-                Icon(Icons.calendar_month, color: AppColors.primary),
+                Icon(Icons.calendar_month, color: AppColors.success),
                 SizedBox(width: 12),
                 Text(
                   'أيام العمل',
@@ -460,6 +460,7 @@ class _EmployeeWorkInfoScreenState extends State<EmployeeWorkInfoScreen> {
             ),
           ),
           const Divider(height: 0),
+
           ListView.separated(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),

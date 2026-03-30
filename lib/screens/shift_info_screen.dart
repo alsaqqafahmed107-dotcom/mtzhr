@@ -65,24 +65,25 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
         widget.clientId,
         widget.employeeNumber,
       );
-      final languageService = Provider.of<LanguageService>(context, listen: false);
+      final languageService =
+          Provider.of<LanguageService>(context, listen: false);
       final lang = languageService.currentLocale.languageCode;
-      final locationsNotice = locations.isEmpty ? Translations.getText('no_location_assigned', lang) : null;
+      final locationsNotice = locations.isEmpty
+          ? Translations.getText('no_location_assigned', lang)
+          : null;
 
       final identifiers = <String?>[
         widget.employeeNumber,
         widget.employeeId?.toString(),
-      ]
-          .where((v) => v != null && v!.trim().isNotEmpty)
-          .toSet()
-          .toList();
+      ].where((v) => v != null && v!.trim().isNotEmpty).toSet().toList();
 
       List<ShiftData> shifts = [];
       for (final identifier in identifiers) {
         shifts = await ApiService.getEmployeeShift(widget.clientId, identifier);
         if (shifts.isNotEmpty) break;
       }
-      final shiftNotice = shifts.isEmpty ? ApiService.lastEmployeeShiftMessage : null;
+      final shiftNotice =
+          shifts.isEmpty ? ApiService.lastEmployeeShiftMessage : null;
 
       if (!mounted) return;
       setState(() {
@@ -94,7 +95,8 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      final languageService = Provider.of<LanguageService>(context, listen: false);
+      final languageService =
+          Provider.of<LanguageService>(context, listen: false);
       final lang = languageService.currentLocale.languageCode;
       setState(() {
         _error = '${Translations.getText('error_loading_data', lang)}: $e';
@@ -115,28 +117,29 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
         ),
         centerTitle: true,
       ),
-        body: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : RefreshIndicator(
-                onRefresh: _loadData,
-                child: ResponsiveCenter(
-                  child: ListView(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-                    children: [
-                      if (_error != null) ...[
-                        _buildErrorCard(_error!),
-                        const SizedBox(height: 16),
-                      ],
-                      _buildLocationsCard(),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _loadData,
+              child: ResponsiveCenter(
+                child: ListView(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+                  children: [
+                    if (_error != null) ...[
+                      _buildErrorCard(_error!),
                       const SizedBox(height: 16),
-                      _buildShiftCard(),
-                      const SizedBox(height: 16),
-                      _buildWorkDaysCard(),
-                      const SizedBox(height: 24),
                     ],
-                  ),
+                    _buildLocationsCard(),
+                    const SizedBox(height: 16),
+                    _buildShiftCard(),
+                    const SizedBox(height: 16),
+                    _buildWorkDaysCard(),
+                    const SizedBox(height: 24),
+                  ],
                 ),
               ),
+            ),
     );
   }
 
@@ -153,7 +156,9 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
             Expanded(
               child: Text(
                 message,
-                style: TextStyle(fontWeight: FontWeight.w600, color: scheme.onErrorContainer),
+                style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: scheme.onErrorContainer),
                 textAlign: TextAlign.start,
               ),
             ),
@@ -169,7 +174,8 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
     final scheme = Theme.of(context).colorScheme;
 
     if (shiftInfo == null) {
-      final languageService = Provider.of<LanguageService>(context, listen: false);
+      final languageService =
+          Provider.of<LanguageService>(context, listen: false);
       final lang = languageService.currentLocale.languageCode;
       return _emptyCard(
         icon: Icons.info_outline,
@@ -179,12 +185,14 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
       );
     }
 
-    final languageService = Provider.of<LanguageService>(context, listen: false);
+    final languageService =
+        Provider.of<LanguageService>(context, listen: false);
     final lang = languageService.currentLocale.languageCode;
     final start = shiftInfo.assignmentStartDate;
     final end = shiftInfo.assignmentEndDate;
     final startText = _formatDate(start);
-    final endText = end == null ? Translations.getText('ongoing', lang) : _formatDate(end);
+    final endText =
+        end == null ? Translations.getText('ongoing', lang) : _formatDate(end);
 
     final cardColor = isNight ? scheme.primaryContainer : scheme.surface;
     final fg = isNight ? scheme.onPrimaryContainer : scheme.onSurface;
@@ -202,7 +210,9 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
-                    color: isNight ? scheme.primary.withOpacity(0.12) : scheme.primary.withOpacity(0.10),
+                    color: isNight
+                        ? scheme.primary.withOpacity(0.12)
+                        : scheme.primary.withOpacity(0.10),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Icon(Icons.access_time, color: scheme.primary),
@@ -244,21 +254,26 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
             _kvRow(
               icon: Icons.swap_horiz,
               label: Translations.getText('flexible_system', lang),
-              value: shiftInfo.isFlexible ? Translations.getText('yes', lang) : Translations.getText('no', lang),
+              value: shiftInfo.isFlexible
+                  ? Translations.getText('yes', lang)
+                  : Translations.getText('no', lang),
               inverse: isNight,
             ),
             const SizedBox(height: 10),
             _kvRow(
               icon: Icons.nights_stay,
               label: Translations.getText('night_shift', lang),
-              value: shiftInfo.isNightShift ? Translations.getText('yes', lang) : Translations.getText('no', lang),
+              value: shiftInfo.isNightShift
+                  ? Translations.getText('yes', lang)
+                  : Translations.getText('no', lang),
               inverse: isNight,
             ),
             const SizedBox(height: 10),
             _kvRow(
               icon: Icons.timer,
               label: Translations.getText('grace_period', lang),
-              value: '${shiftInfo.gracePeriodMinutes} ${Translations.getText('minutes', lang)}',
+              value:
+                  '${shiftInfo.gracePeriodMinutes} ${Translations.getText('minutes', lang)}',
               inverse: isNight,
             ),
             const SizedBox(height: 16),
@@ -289,7 +304,8 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
 
   Widget _buildLocationsCard() {
     if (_assignedLocations.isEmpty) {
-      final languageService = Provider.of<LanguageService>(context, listen: false);
+      final languageService =
+          Provider.of<LanguageService>(context, listen: false);
       final lang = languageService.currentLocale.languageCode;
       return _emptyCard(
         icon: Icons.location_on_outlined,
@@ -314,7 +330,10 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
                 const SizedBox(width: 10),
                 Text(
                   Translations.getText('location', lang),
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleLarge
+                      ?.copyWith(fontWeight: FontWeight.bold),
                 ),
               ],
             ),
@@ -339,14 +358,18 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            loc.locationName.isNotEmpty ? loc.locationName : '-',
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                            loc.locationName.isNotEmpty
+                                ? loc.locationName
+                                : '-',
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 15),
                           ),
                           if (address.isNotEmpty) ...[
                             const SizedBox(height: 4),
                             Text(
                               address,
-                              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
+                              style: TextStyle(
+                                  color: scheme.onSurfaceVariant, fontSize: 13),
                             ),
                           ],
                         ],
@@ -354,7 +377,8 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
                     ),
                     if (loc.radiusMeters != null && loc.radiusMeters! > 0)
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
                         decoration: BoxDecoration(
                           color: scheme.primaryContainer,
                           borderRadius: BorderRadius.circular(12),
@@ -379,7 +403,8 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
 
   Widget _buildWorkDaysCard() {
     final days = _workDays;
-    final languageService = Provider.of<LanguageService>(context, listen: false);
+    final languageService =
+        Provider.of<LanguageService>(context, listen: false);
     final lang = languageService.currentLocale.languageCode;
     if (_currentShift == null) {
       return _emptyCard(
@@ -401,7 +426,10 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
                 const SizedBox(width: 10),
                 Text(
                   Translations.getText('work_days', lang),
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                  style: Theme.of(context)
+                      .textTheme
+                      .titleLarge
+                      ?.copyWith(fontWeight: FontWeight.bold),
                 ),
               ],
             ),
@@ -420,33 +448,44 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               itemCount: days.length,
-              separatorBuilder: (_, __) => const Divider(height: 1, indent: 20, endIndent: 20),
+              separatorBuilder: (_, __) =>
+                  const Divider(height: 1, indent: 20, endIndent: 20),
               itemBuilder: (_, index) {
                 final day = days[index];
                 final isWorking = day.isWorkingDay;
-                final statusColor = isWorking ? scheme.tertiary : scheme.error;
-                final statusTextColor = isWorking ? scheme.onSurface : scheme.onSurfaceVariant;
+                final statusColor = isWorking ? Colors.green : scheme.error;
+                final statusTextColor =
+                    isWorking ? scheme.onSurface : scheme.onSurfaceVariant;
                 return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                   child: Row(
                     children: [
-                      Icon(isWorking ? Icons.check_circle : Icons.cancel, color: statusColor, size: 18),
+                      Icon(isWorking ? Icons.check_circle : Icons.cancel,
+                          color: statusColor, size: 18),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
                           day.dayName,
                           style: TextStyle(
                             fontSize: 16,
-                            fontWeight: isWorking ? FontWeight.bold : FontWeight.w600,
+                            fontWeight:
+                                isWorking ? FontWeight.bold : FontWeight.w600,
                             color: statusTextColor,
                           ),
                         ),
                       ),
                       Text(
-                        day.displayTimeRange.isNotEmpty ? day.displayTimeRange : (isWorking ? '-' : Translations.getText('status_holiday', lang)),
+                        day.displayTimeRange.isNotEmpty
+                            ? day.displayTimeRange
+                            : (isWorking
+                                ? '-'
+                                : Translations.getText('status_holiday', lang)),
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
-                          color: isWorking ? scheme.primary : scheme.onSurfaceVariant,
+                          color: isWorking
+                              ? scheme.primary
+                              : scheme.onSurfaceVariant,
                         ),
                       ),
                     ],
@@ -466,7 +505,9 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
     required bool inverse,
   }) {
     final scheme = Theme.of(context).colorScheme;
-    final labelColor = inverse ? scheme.onPrimaryContainer.withOpacity(0.85) : scheme.onSurfaceVariant;
+    final labelColor = inverse
+        ? scheme.onPrimaryContainer.withOpacity(0.85)
+        : scheme.onSurfaceVariant;
     final valueColor = inverse ? scheme.onPrimaryContainer : scheme.onSurface;
     return Row(
       children: [
@@ -475,12 +516,14 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
         Expanded(
           child: Text(
             label,
-            style: TextStyle(fontSize: 14, color: labelColor, fontWeight: FontWeight.w600),
+            style: TextStyle(
+                fontSize: 14, color: labelColor, fontWeight: FontWeight.w600),
           ),
         ),
         Text(
           value,
-          style: TextStyle(fontSize: 14, color: valueColor, fontWeight: FontWeight.bold),
+          style: TextStyle(
+              fontSize: 14, color: valueColor, fontWeight: FontWeight.bold),
         ),
       ],
     );
@@ -497,7 +540,10 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
             const SizedBox(height: 12),
             Text(
               title,
-              style: TextStyle(fontSize: 16, color: scheme.onSurfaceVariant, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                  fontSize: 16,
+                  color: scheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600),
               textAlign: TextAlign.center,
             ),
           ],
@@ -557,7 +603,8 @@ class _AllShiftsScreenState extends State<AllShiftsScreen> {
 
       List<ShiftData> shifts = [];
       for (final identifier in identifiers) {
-        shifts = await ApiService.getEmployeeShiftsAll(widget.clientId, identifier);
+        shifts =
+            await ApiService.getEmployeeShiftsAll(widget.clientId, identifier);
         if (shifts.isNotEmpty) break;
       }
 
@@ -569,7 +616,8 @@ class _AllShiftsScreenState extends State<AllShiftsScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      final languageService = Provider.of<LanguageService>(context, listen: false);
+      final languageService =
+          Provider.of<LanguageService>(context, listen: false);
       final lang = languageService.currentLocale.languageCode;
       setState(() {
         _error = '${Translations.getText('error_loading_shifts', lang)}: $e';
@@ -590,94 +638,123 @@ class _AllShiftsScreenState extends State<AllShiftsScreen> {
         ),
         centerTitle: true,
       ),
-        body: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : _error != null
-                ? Center(
-                    child: Text(
-                      _error!,
-                      style: const TextStyle(fontFamily: 'Tajawal'),
-                      textAlign: TextAlign.center,
-                    ),
-                  )
-                : RefreshIndicator(
-                    onRefresh: _load,
-                    child: _shifts.isEmpty
-                        ? ResponsiveCenter(
-                            child: ListView(
-                              padding: const EdgeInsets.all(16),
-                              children: [
-                                Center(
-                                  child: Text(
-                                    _notice?.trim().isNotEmpty == true ? _notice! : Translations.getText('no_shifts_available', lang),
-                                    style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
-                                    textAlign: TextAlign.center,
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+              ? Center(
+                  child: Text(
+                    _error!,
+                    style: const TextStyle(fontFamily: 'Tajawal'),
+                    textAlign: TextAlign.center,
+                  ),
+                )
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  child: _shifts.isEmpty
+                      ? ResponsiveCenter(
+                          child: ListView(
+                            padding: const EdgeInsets.all(16),
+                            children: [
+                              Center(
+                                child: Text(
+                                  _notice?.trim().isNotEmpty == true
+                                      ? _notice!
+                                      : Translations.getText(
+                                          'no_shifts_available', lang),
+                                  style: TextStyle(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurfaceVariant),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : ResponsiveCenter(
+                          child: ListView.separated(
+                            padding: const EdgeInsets.all(16),
+                            itemCount: _shifts.length,
+                            separatorBuilder: (_, __) =>
+                                const SizedBox(height: 12),
+                            itemBuilder: (_, index) {
+                              final scheme = Theme.of(context).colorScheme;
+                              final shift = _shifts[index];
+                              final info = ShiftInfo.fromShiftData(shift);
+                              final isNight = info.isNightShift;
+                              final bg = isNight
+                                  ? scheme.primaryContainer
+                                  : scheme.surface;
+                              final fg = isNight
+                                  ? scheme.onPrimaryContainer
+                                  : scheme.onSurface;
+                              final sub = isNight
+                                  ? scheme.onPrimaryContainer.withOpacity(0.85)
+                                  : scheme.onSurfaceVariant;
+                              return Card(
+                                color: bg,
+                                child: Padding(
+                                  padding: const EdgeInsets.all(16),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Icon(Icons.access_time,
+                                              color: scheme.primary),
+                                          const SizedBox(width: 10),
+                                          Expanded(
+                                            child: Text(
+                                              info.name,
+                                              style: TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 16,
+                                                  color: fg),
+                                            ),
+                                          ),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 10, vertical: 6),
+                                            decoration: BoxDecoration(
+                                              color: scheme.primary
+                                                  .withOpacity(0.12),
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                            ),
+                                            child: Text(
+                                              shift.isActive
+                                                  ? Translations.getText(
+                                                      'active', lang)
+                                                  : Translations.getText(
+                                                      'inactive', lang),
+                                              style: TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  color: fg),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 10),
+                                      Text(
+                                        '${info.dailyStartTime} - ${info.dailyEndTime}',
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            color: sub),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        '${Translations.getText('start', lang)}: ${info.assignmentStartDate.year.toString().padLeft(4, '0')}-${info.assignmentStartDate.month.toString().padLeft(2, '0')}-${info.assignmentStartDate.day.toString().padLeft(2, '0')}',
+                                        style: TextStyle(color: sub),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                              ],
-                            ),
-                          )
-                        : ResponsiveCenter(
-                            child: ListView.separated(
-                              padding: const EdgeInsets.all(16),
-                              itemCount: _shifts.length,
-                              separatorBuilder: (_, __) => const SizedBox(height: 12),
-                              itemBuilder: (_, index) {
-                                final scheme = Theme.of(context).colorScheme;
-                                final shift = _shifts[index];
-                                final info = ShiftInfo.fromShiftData(shift);
-                                final isNight = info.isNightShift;
-                                final bg = isNight ? scheme.primaryContainer : scheme.surface;
-                                final fg = isNight ? scheme.onPrimaryContainer : scheme.onSurface;
-                                final sub = isNight ? scheme.onPrimaryContainer.withOpacity(0.85) : scheme.onSurfaceVariant;
-                                return Card(
-                                  color: bg,
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(16),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Icon(Icons.access_time, color: scheme.primary),
-                                            const SizedBox(width: 10),
-                                            Expanded(
-                                              child: Text(
-                                                info.name,
-                                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: fg),
-                                              ),
-                                            ),
-                                            Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                              decoration: BoxDecoration(
-                                                color: scheme.primary.withOpacity(0.12),
-                                                borderRadius: BorderRadius.circular(12),
-                                              ),
-                                              child: Text(
-                                                shift.isActive ? Translations.getText('active', lang) : Translations.getText('inactive', lang),
-                                                style: TextStyle(fontWeight: FontWeight.bold, color: fg),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 10),
-                                        Text(
-                                          '${info.dailyStartTime} - ${info.dailyEndTime}',
-                                          style: TextStyle(fontWeight: FontWeight.w600, color: sub),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        Text(
-                                          '${Translations.getText('start', lang)}: ${info.assignmentStartDate.year.toString().padLeft(4, '0')}-${info.assignmentStartDate.month.toString().padLeft(2, '0')}-${info.assignmentStartDate.day.toString().padLeft(2, '0')}',
-                                          style: TextStyle(color: sub),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
+                              );
+                            },
                           ),
-                  ),
+                        ),
+                ),
     );
   }
 }
