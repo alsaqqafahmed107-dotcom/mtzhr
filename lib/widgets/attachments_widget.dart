@@ -5,8 +5,11 @@ import 'package:http/http.dart' as http;
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
+import 'package:provider/provider.dart';
 import '../config/api_config.dart';
+import '../services/language_service.dart';
 import '../services/permission_service.dart';
+import '../services/translations.dart';
 import 'package:flutter/services.dart';
 import '../utils/file_actions.dart';
 import 'package:open_file/open_file.dart';
@@ -25,27 +28,32 @@ class AttachmentsWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final lang = context.watch<LanguageService>().currentLocale.languageCode;
     if (attachments.isEmpty) {
-      return _buildEmptyState();
+      return _buildEmptyState(lang);
     }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildHeader(),
+        _buildHeader(lang),
         const SizedBox(height: 12),
-        _buildAttachmentsList(),
+        _buildAttachmentsList(lang),
       ],
     );
   }
 
-  Widget _buildHeader() {
+  Widget _buildHeader(String lang) {
     return Row(
       children: [
-        Icon(Icons.attach_file, color: Colors.blue, size: 20),
+        const Icon(Icons.attach_file, color: Colors.blue, size: 20),
         const SizedBox(width: 8),
         Text(
-          'المرفقات (${attachments.length})',
+          Translations.getTextWithParams(
+            'attachments_with_count',
+            lang,
+            {'count': attachments.length.toString()},
+          ),
           style: TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.bold,
@@ -56,7 +64,7 @@ class AttachmentsWidget extends StatelessWidget {
     );
   }
 
-  Widget _buildEmptyState() {
+  Widget _buildEmptyState(String lang) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -69,7 +77,7 @@ class AttachmentsWidget extends StatelessWidget {
           Icon(Icons.attach_file, color: Colors.grey[400], size: 24),
           const SizedBox(width: 12),
           Text(
-            'لا توجد مرفقات لهذا الطلب',
+            Translations.getText('no_attachments_for_request', lang),
             style: TextStyle(
               color: Colors.grey[600],
               fontSize: 14,
@@ -80,21 +88,22 @@ class AttachmentsWidget extends StatelessWidget {
     );
   }
 
-  Widget _buildAttachmentsList() {
+  Widget _buildAttachmentsList(String lang) {
     return ListView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: attachments.length,
       itemBuilder: (context, index) {
         final attachment = attachments[index];
-        return _buildAttachmentTile(attachment, context);
+        return _buildAttachmentTile(attachment, context, lang);
       },
     );
   }
 
   Widget _buildAttachmentTile(
-      Map<String, dynamic> attachment, BuildContext context) {
-    final fileName = attachment['FileName'] ?? 'ملف غير محدد';
+      Map<String, dynamic> attachment, BuildContext context, String lang) {
+    final fileName =
+        attachment['FileName'] ?? Translations.getText('file_not_specified', lang);
     final fileType = (attachment['FileType'] ?? '').toString().toLowerCase();
     final fileSize = attachment['FormattedFileSize'] ?? '';
     final createdDate = attachment['CreatedDate'] ?? '';
@@ -121,14 +130,22 @@ class AttachmentsWidget extends StatelessWidget {
           children: [
             const SizedBox(height: 4),
             Text(
-              'الحجم: $fileSize',
+              Translations.getTextWithParams(
+                'file_size',
+                lang,
+                {'size': fileSize.toString()},
+              ),
               style: TextStyle(
                 color: Colors.grey[600],
                 fontSize: 12,
               ),
             ),
             Text(
-              'تاريخ الرفع: $createdDate',
+              Translations.getTextWithParams(
+                'upload_date',
+                lang,
+                {'date': createdDate.toString()},
+              ),
               style: TextStyle(
                 color: Colors.grey[600],
                 fontSize: 12,
@@ -182,19 +199,21 @@ class AttachmentsWidget extends StatelessWidget {
 
   Widget _buildActionButtons(
       Map<String, dynamic> attachment, BuildContext context) {
+    final lang =
+        Provider.of<LanguageService>(context, listen: false).currentLocale.languageCode;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         // زر فتح المرفق
         IconButton(
           icon: const Icon(Icons.visibility, color: Colors.green, size: 20),
-          tooltip: 'فتح المرفق',
+          tooltip: Translations.getText('open_attachment', lang),
           onPressed: () => _openAttachment(attachment, context),
         ),
         // زر تحميل المرفق
         IconButton(
           icon: const Icon(Icons.download, color: Colors.blue, size: 20),
-          tooltip: 'تحميل المرفق',
+          tooltip: Translations.getText('download_attachment', lang),
           onPressed: () => _downloadAttachment(attachment, context),
         ),
       ],
@@ -203,8 +222,11 @@ class AttachmentsWidget extends StatelessWidget {
 
   Future<void> _openAttachment(
       Map<String, dynamic> attachment, BuildContext context) async {
+    final lang =
+        Provider.of<LanguageService>(context, listen: false).currentLocale.languageCode;
     try {
-      final fileName = attachment['FileName'] as String? ?? 'ملف غير محدد';
+      final fileName = attachment['FileName'] as String? ??
+          Translations.getText('file_not_specified', lang);
       final attachmentId = attachment['ID'] as int? ?? 0;
 
       // إظهار مؤشر التحميل
@@ -218,7 +240,13 @@ class AttachmentsWidget extends StatelessWidget {
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
               const SizedBox(width: 12),
-              Text('جاري فتح: $fileName'),
+              Text(
+                Translations.getTextWithParams(
+                  'opening_file',
+                  lang,
+                  {'fileName': fileName},
+                ),
+              ),
             ],
           ),
           duration: const Duration(seconds: 2),
@@ -232,7 +260,7 @@ class AttachmentsWidget extends StatelessWidget {
       if (!hasPermission) {
         PermissionService.showPermissionError(
           context,
-          'يجب منح أذونات الملفات لفتح المرفقات',
+          Translations.getText('file_permissions_required_open', lang),
         );
         return;
       }
@@ -249,7 +277,13 @@ class AttachmentsWidget extends StatelessWidget {
         if (opened) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('تم فتح: $fileName'),
+              content: Text(
+                Translations.getTextWithParams(
+                  'file_opened',
+                  lang,
+                  {'fileName': fileName},
+                ),
+              ),
               backgroundColor: Colors.green,
             ),
           );
@@ -264,16 +298,23 @@ class AttachmentsWidget extends StatelessWidget {
               mode: LaunchMode.externalApplication,
             );
           } else {
-            throw Exception('لا يمكن فتح المرفق');
+            throw Exception('cannot_open_attachment');
           }
         }
       } else {
-        throw Exception('فشل في تحميل المرفق: ${response['Message']}');
+        throw Exception('download_failed');
       }
     } catch (e) {
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('خطأ في فتح المرفق: $e'),
+          content: Text(
+            Translations.getTextWithParams(
+              'error_opening_attachment_with_error',
+              lang,
+              {'error': e.toString()},
+            ),
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -377,8 +418,11 @@ class AttachmentsWidget extends StatelessWidget {
 
   Future<void> _downloadAttachment(
       Map<String, dynamic> attachment, BuildContext context) async {
+    final lang =
+        Provider.of<LanguageService>(context, listen: false).currentLocale.languageCode;
     try {
-      final fileName = attachment['FileName'] as String? ?? 'ملف غير محدد';
+      final fileName = attachment['FileName'] as String? ??
+          Translations.getText('file_not_specified', lang);
       final attachmentId = attachment['ID'] as int? ?? 0;
 
       print('🔍 بدء تحميل المرفق: $fileName (ID: $attachmentId)');
@@ -390,7 +434,7 @@ class AttachmentsWidget extends StatelessWidget {
         print('❌ لم يتم منح أذونات الملفات');
         PermissionService.showPermissionError(
           context,
-          'يجب منح أذونات الملفات لتحميل المرفقات',
+          Translations.getText('file_permissions_required_download', lang),
         );
         return;
       }
@@ -408,7 +452,13 @@ class AttachmentsWidget extends StatelessWidget {
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
               const SizedBox(width: 12),
-              Text('جاري تحميل: $fileName'),
+              Text(
+                Translations.getTextWithParams(
+                  'downloading_file',
+                  lang,
+                  {'fileName': fileName},
+                ),
+              ),
             ],
           ),
           duration: const Duration(seconds: 2),
@@ -434,14 +484,28 @@ class AttachmentsWidget extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('تم تحميل: $fileName'),
                 Text(
-                  'المسار: ${filePath.split('/').last}',
-                  style: TextStyle(fontSize: 12),
+                  Translations.getTextWithParams(
+                    'downloaded_file',
+                    lang,
+                    {'fileName': fileName},
+                  ),
                 ),
                 Text(
-                  'الحجم: ${_formatFileSize(fileSize)}',
-                  style: TextStyle(fontSize: 12),
+                  Translations.getTextWithParams(
+                    'file_path',
+                    lang,
+                    {'path': filePath.split('/').last},
+                  ),
+                  style: const TextStyle(fontSize: 12),
+                ),
+                Text(
+                  Translations.getTextWithParams(
+                    'file_size_formatted',
+                    lang,
+                    {'size': _formatFileSize(fileSize, lang)},
+                  ),
+                  style: const TextStyle(fontSize: 12),
                 ),
               ],
             ),
@@ -460,9 +524,16 @@ class AttachmentsWidget extends StatelessWidget {
             print('✅ تم فتح الملف بنجاح');
 
             // إظهار رسالة نجاح إضافية
+            if (!context.mounted) return;
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('تم فتح الملف: $fileName'),
+                content: Text(
+                  Translations.getTextWithParams(
+                    'opened_file',
+                    lang,
+                    {'fileName': fileName},
+                  ),
+                ),
                 backgroundColor: Colors.blue,
                 duration: const Duration(seconds: 2),
               ),
@@ -510,13 +581,20 @@ class AttachmentsWidget extends StatelessWidget {
         }
       } else {
         print('❌ فشل في تحميل المرفق: ${response['Message']}');
-        throw Exception('فشل في تحميل المرفق: ${response['Message']}');
+        throw Exception('download_failed');
       }
     } catch (e) {
       print('💥 خطأ في تحميل المرفق: $e');
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('خطأ في تحميل المرفق: $e'),
+          content: Text(
+            Translations.getTextWithParams(
+              'error_downloading_attachment_with_error',
+              lang,
+              {'error': e.toString()},
+            ),
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -524,11 +602,18 @@ class AttachmentsWidget extends StatelessWidget {
   }
 
   // دالة مساعدة لتنسيق حجم الملف
-  String _formatFileSize(int bytes) {
-    if (bytes == 0) return '0 بايت';
+  String _formatFileSize(int bytes, String lang) {
+    if (bytes == 0) {
+      return '0 ${Translations.getText('unit_bytes', lang)}';
+    }
 
     const k = 1024;
-    const sizes = ['بايت', 'كيلوبايت', 'ميجابايت', 'جيجابايت'];
+    final sizes = [
+      Translations.getText('unit_bytes', lang),
+      Translations.getText('unit_kb', lang),
+      Translations.getText('unit_mb', lang),
+      Translations.getText('unit_gb', lang),
+    ];
     final i = (log(bytes) / log(k)).floor();
 
     return '${(bytes / pow(k, i)).toStringAsFixed(2)} ${sizes[i]}';
@@ -758,7 +843,9 @@ class AttachmentDetailDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fileName = attachment['FileName'] ?? 'ملف غير محدد';
+    final lang = Provider.of<LanguageService>(context).currentLocale.languageCode;
+    final fileName =
+        attachment['FileName'] ?? Translations.getText('file_not_specified', lang);
     final fileType = attachment['FileType'] ?? '';
     final fileSize = attachment['FormattedFileSize'] ?? '';
     final createdDate = attachment['CreatedDate'] ?? '';
@@ -780,7 +867,7 @@ class AttachmentDetailDialog extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    'تفاصيل المرفق',
+                    Translations.getText('attachment_details', lang),
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -794,18 +881,33 @@ class AttachmentDetailDialog extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 20),
-            _buildDetailRow('اسم الملف:', fileName),
-            _buildDetailRow('نوع الملف:', fileType),
-            _buildDetailRow('فئة الملف:', fileCategory),
-            _buildDetailRow('حجم الملف:', fileSize),
-            _buildDetailRow('تاريخ الرفع:', createdDate),
+            _buildDetailRow(
+              '${Translations.getText('file_name', lang)}:',
+              fileName,
+            ),
+            _buildDetailRow(
+              '${Translations.getText('file_type', lang)}:',
+              fileType.toString(),
+            ),
+            _buildDetailRow(
+              '${Translations.getText('file_category', lang)}:',
+              fileCategory.toString(),
+            ),
+            _buildDetailRow(
+              '${Translations.getText('file_size_label', lang)}',
+              fileSize.toString(),
+            ),
+            _buildDetailRow(
+              '${Translations.getText('upload_date_label', lang)}:',
+              createdDate.toString(),
+            ),
             const SizedBox(height: 20),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
                 ElevatedButton.icon(
                   icon: Icon(Icons.visibility),
-                  label: Text('فتح'),
+                  label: Text(Translations.getText('open', lang)),
                   onPressed: () {
                     Navigator.of(context).pop('open');
                   },
@@ -816,7 +918,7 @@ class AttachmentDetailDialog extends StatelessWidget {
                 ),
                 ElevatedButton.icon(
                   icon: Icon(Icons.download),
-                  label: Text('تحميل'),
+                  label: Text(Translations.getText('download', lang)),
                   onPressed: () {
                     Navigator.of(context).pop('download');
                   },

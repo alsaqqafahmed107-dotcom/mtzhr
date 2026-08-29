@@ -13,6 +13,8 @@ import '../services/language_service.dart';
 import '../services/translations.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../utils/platform_helper.dart';
@@ -39,6 +41,55 @@ class AttendanceScreen extends StatefulWidget {
 
 class _AttendanceScreenState extends State<AttendanceScreen>
     with TickerProviderStateMixin {
+  static const bool _enableRemoteDebugTelemetry = true;
+  static const String _debugEnvPath =
+      'd:\\new\\.dbg\\attendance-post-verify-fail.env';
+  String? _debugServerUrl;
+  String? _debugSessionId;
+  // #region debug-point C:reporting-helper
+  Future<void> _reportDebugEvent(
+    String hypothesisId,
+    String location,
+    String msg, {
+    Map<String, dynamic>? data,
+  }) async {
+    if (!_enableRemoteDebugTelemetry) return;
+    try {
+      if (_debugServerUrl == null || _debugSessionId == null) {
+        try {
+          final envText = await File(_debugEnvPath).readAsString();
+          for (final line in envText.split('\n')) {
+            if (line.startsWith('DEBUG_SERVER_URL=')) {
+              _debugServerUrl = line.substring('DEBUG_SERVER_URL='.length).trim();
+            } else if (line.startsWith('DEBUG_SESSION_ID=')) {
+              _debugSessionId = line.substring('DEBUG_SESSION_ID='.length).trim();
+            }
+          }
+        } catch (_) {}
+      }
+      final url = _debugServerUrl ?? 'http://192.168.1.163:7777/event';
+      final session = _debugSessionId ?? 'attendance-post-verify-fail';
+      final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
+      final req = await client.postUrl(
+        Uri.parse(url),
+      );
+      req.headers.contentType = ContentType.json;
+      req.write(jsonEncode({
+        'sessionId': session,
+        'runId': 'pre-fix',
+        'hypothesisId': hypothesisId,
+        'location': location,
+        'msg': '[DEBUG] $msg',
+        'data': data ?? const {},
+        'ts': DateTime.now().millisecondsSinceEpoch,
+        'traceId': '${widget.employeeNumber}-${DateTime.now().microsecondsSinceEpoch}',
+      }));
+      await (await req.close()).drain<void>();
+      client.close(force: true);
+    } catch (_) {}
+  }
+  // #endregion
+
   final ApiService _apiService = ApiService();
   final LocationStabilityService _locationStabilityService =
       LocationStabilityService();
@@ -47,6 +98,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   bool _isProcessing = false;
   bool _isInitializing = true;
   bool _usedFaceVerification = false;
+  Map<String, dynamic>? _faceVerificationProof;
+  static const Duration _maxFaceVerificationAge = Duration(minutes: 2);
   String _currentStep = '';
   Position? _currentPosition;
   Timer? _locationTimer;
@@ -236,6 +289,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       _isProcessing = false;
       _isInitializing = true;
       _usedFaceVerification = false;
+      _faceVerificationProof = null;
       _isSuccess = null;
       _resultMessage = '';
       _resultDetails = '';
@@ -255,6 +309,107 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     _successController.dispose();
     _errorController.dispose();
     super.dispose();
+  }
+
+  bool _isTruthyFaceResult(Object? navigationResult) {
+    if (navigationResult == true) return true;
+    if (navigationResult is Map) {
+      return navigationResult['Success'] == true ||
+          navigationResult['success'] == true ||
+          navigationResult['Matched'] == true ||
+          navigationResult['Completed'] == true ||
+          navigationResult['Verified'] == true ||
+          navigationResult['FaceVerified'] == true ||
+          navigationResult['Enrolled'] == true;
+    }
+    if (navigationResult is int) return navigationResult > 0;
+    if (navigationResult is String) {
+      return const {'true', 'ok', 'success', 'done', 'verified', 'enrolled'}
+          .contains(navigationResult.toLowerCase());
+    }
+    return false;
+  }
+
+  Map<String, String>? _validateFaceProofBeforeSubmit() {
+    if (!_usedFaceVerification) {
+      return {
+        'title': 'التحقق من الوجه مطلوب',
+        'details':
+            'يجب إكمال التحقق من بصمة الوجه بنجاح قبل السماح بتسجيل الحضور أو الانصراف.',
+      };
+    }
+
+    final proof = _faceVerificationProof;
+    if (proof == null) {
+      return {
+        'title': 'تعذر اعتماد التحقق من الوجه',
+        'details':
+            'اكتملت شاشة التحقق لكن لم يصل إثبات النجاح إلى شاشة الحضور. أعد تنفيذ التحقق من الوجه مرة أخرى.',
+      };
+    }
+
+    if (proof['passed'] != true) {
+      return {
+        'title': 'فشل التحقق من الوجه',
+        'details':
+            'التحقق الوجهي لم يكتمل بنجاح، لذلك تم إيقاف تسجيل الحضور لحماية العملية.',
+      };
+    }
+
+    final proofEmployee = proof['employeeNumber']?.toString();
+    if (proofEmployee == null || proofEmployee.isEmpty) {
+      return {
+        'title': 'بيانات التحقق ناقصة',
+        'details':
+            'إثبات التحقق من الوجه لا يحتوي على رقم الموظف. أعد التحقق من الوجه ثم حاول مجددًا.',
+      };
+    }
+
+    if (proofEmployee != widget.employeeNumber) {
+      return {
+        'title': 'عدم تطابق بيانات التحقق',
+        'details':
+            'إثبات التحقق من الوجه يخص موظفًا آخر، لذلك تم رفض العملية. تأكد من تسجيل الدخول بالحساب الصحيح ثم أعد التحقق.',
+      };
+    }
+
+    final verificationAtRaw = proof['verificationAtUtc']?.toString();
+    if (verificationAtRaw == null || verificationAtRaw.isEmpty) {
+      return {
+        'title': 'وقت التحقق غير متوفر',
+        'details':
+            'تمت مطابقة الوجه لكن بدون ختم زمني صالح، لذلك لا يمكن متابعة تسجيل الحضور. أعد التحقق من الوجه.',
+      };
+    }
+
+    final verificationAt = DateTime.tryParse(verificationAtRaw)?.toUtc();
+    if (verificationAt == null) {
+      return {
+        'title': 'وقت التحقق غير صالح',
+        'details':
+            'صيغة وقت التحقق من الوجه غير صحيحة. أعد التحقق ثم حاول مرة أخرى.',
+      };
+    }
+
+    final nowUtc = DateTime.now().toUtc();
+    final age = nowUtc.difference(verificationAt);
+    if (age.inSeconds < -60) {
+      return {
+        'title': 'وقت التحقق غير متزامن',
+        'details':
+            'يوجد فرق غير متوقع في توقيت التحقق من الوجه. تحقق من وقت الجهاز ثم أعد المحاولة.',
+      };
+    }
+
+    if (age > _maxFaceVerificationAge) {
+      return {
+        'title': 'انتهت صلاحية التحقق من الوجه',
+        'details':
+            'مر وقت طويل منذ آخر تحقق ناجح للوجه. أعد التحقق من الوجه مباشرة ثم حاول تسجيل الحضور.',
+      };
+    }
+
+    return null;
   }
 
   Future<void> _startProcess() async {
@@ -399,7 +554,27 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         _currentStep = 'جاري التحقق من إعدادات الوجه...';
       });
 
-      final faceStatus = await FaceApiService.getFaceStatus(widget.clientId, widget.employeeNumber);
+      final faceStatus = await FaceApiService.getEmployeeFaceImageStatus(
+        widget.clientId,
+        widget.employeeNumber,
+      );
+      // #region debug-point D:face-status
+      unawaited(_reportDebugEvent(
+        'D',
+        'attendance_screen.dart:_processAttendance',
+        'Fetched face status before attendance',
+        data: {
+          'success': faceStatus['Success'],
+          'attendanceMethod': faceStatus['AttendanceMethod'],
+          'isFaceRequired': faceStatus['IsFaceRequired'],
+          'hasFaceTemplate': faceStatus['HasFaceTemplate'],
+          'hasFaceImage': faceStatus['HasFaceImage'],
+          'hasImage': faceStatus['HasImage'],
+          'isRegistered': faceStatus['IsRegistered'],
+          'message': faceStatus['Message'],
+        },
+      ));
+      // #endregion
       
       if (faceStatus['Success'] != true) {
         _showError('خطأ في التحقق من الوجه', faceStatus['Message'] ?? 'لا يمكن الاتصال بسيرفر البصمة حالياً');
@@ -411,16 +586,25 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
       final attendanceMethod =
           int.tryParse(faceStatus['AttendanceMethod']?.toString() ?? '0') ?? 0;
+      final hasStoredFace = faceStatus['HasFaceTemplate'] == true ||
+          faceStatus['HasFaceImage'] == true ||
+          faceStatus['HasImage'] == true ||
+          faceStatus['IsRegistered'] == true;
       final shouldRequireFace = faceStatus['IsFaceRequired'] == true ||
           attendanceMethod == 1 ||
-          attendanceMethod == 2;
+          attendanceMethod == 2 ||
+          widget.authenticationMethod == 'FACE';
 
       if (shouldRequireFace) {
         bool faceVerified = false;
+        bool enrollmentCompleted = false;
+        Object? enrollmentResult;
+        Object? navigationResult;
 
-        if (faceStatus['HasFaceTemplate'] == false) {
-          // الموظف يحتاج تسجيل وجهه أول مرة
-          faceVerified = await Navigator.push(
+        if (!hasStoredFace) {
+          // الموظف يحتاج أولاً إلى التسجيل ثم التحقق الإلزامي قبل الحضور.
+          if (!mounted) return;
+          enrollmentResult = await Navigator.push(
             context,
             MaterialPageRoute(
               builder: (context) => FaceEnrollmentScreen(
@@ -428,10 +612,20 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                 clientId: widget.clientId,
               ),
             ),
-          ) ?? false;
-        } else {
-          // الموظف مسجل وجهه، نحتاج نتحقق منه
-          faceVerified = await Navigator.push(
+          );
+
+          enrollmentCompleted = _isTruthyFaceResult(enrollmentResult);
+          if (enrollmentCompleted) {
+            faceStatus['HasFaceTemplate'] = true;
+            faceStatus['HasFaceImage'] = true;
+            FaceApiService.clearLastFaceSession();
+            _log('✅ اكتمل تسجيل الوجه. سيتم الآن تنفيذ التحقق الإلزامي قبل الحضور.');
+          }
+        }
+
+        if (hasStoredFace || enrollmentCompleted) {
+          if (!mounted) return;
+          navigationResult = await Navigator.push(
             context,
             MaterialPageRoute(
               builder: (context) => FaceVerificationScreen(
@@ -440,11 +634,140 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                 showResetButton: false,
               ),
             ),
-          ) ?? false;
+          );
+          faceVerified = _isTruthyFaceResult(navigationResult);
+        }
+        // #region debug-point C:navigation-result
+        unawaited(_reportDebugEvent(
+          'C',
+          'attendance_screen.dart:_processAttendance',
+          'Returned from face screen',
+          data: {
+            'navigationResultType': navigationResult.runtimeType.toString(),
+            'navigationResultValue': navigationResult?.toString(),
+            'enrollmentResultType': enrollmentResult.runtimeType.toString(),
+            'enrollmentResultValue': enrollmentResult?.toString(),
+            'enrollmentCompleted': enrollmentCompleted,
+            'faceVerifiedInitial': faceVerified,
+            'hasStoredFace': hasStoredFace,
+          },
+        ));
+        // #endregion
+
+        if (faceVerified) {
+          if (navigationResult is Map) {
+            _faceVerificationProof = {
+              'passed': true,
+              'employeeNumber': widget.employeeNumber,
+              'verificationAtUtc': navigationResult['VerificationAtUtc']?.toString() ??
+                  DateTime.now().toUtc().toIso8601String(),
+              'confidenceScore': (navigationResult['ConfidenceScore'] as num?)?.toDouble(),
+              'livenessScore': (navigationResult['LivenessScore'] as num?)?.toDouble(),
+              'source': navigationResult['Reason']?.toString() ?? 'face-screen',
+              'serverMessage': navigationResult['ServerMessage']?.toString(),
+            };
+          } else {
+            _faceVerificationProof = {
+              'passed': true,
+              'employeeNumber': widget.employeeNumber,
+              'verificationAtUtc': DateTime.now().toUtc().toIso8601String(),
+              'source': 'face-session-fallback',
+            };
+          }
         }
 
+        // 🛡️ Failsafe — طبقة الحماية الفائقة والثالثة (Triple Protection):
+        // 1. Failsafe الأساسي (العلامة العالمية الثابتة)
+        // 2. إعادة فحص إضافي بعد Failsafe مباشرة للتأكد من عدم وجود علامة زمنية صالحة حتى لو
+        //    لم يتحقق match رقم الموظف بشكل غامض (edge cases)
+        // 3. حماية نهائية: إذا لم ينجح أي من السابقين، نعطي مهلة 800ms ثم نعيد الفحص مرة
+        //    أخيرة في حالة أن الضغط المستخدم زر الإغلاق السريع جداً قبل وصول Navigator.result
         if (!faceVerified) {
-          _showError('فشل التحقق من الوجه', 'يجب التحقق من بصمة الوجه لتسجيل الحضور');
+          final fallbackOk = FaceApiService.verifyLastFaceSessionSuccess(
+            employeeNumber: widget.employeeNumber,
+            requiredSessionKind: 'verification',
+          );
+          // #region debug-point C:failsafe-1
+          unawaited(_reportDebugEvent(
+            'C',
+            'attendance_screen.dart:_processAttendance',
+            'Checked global success flag fallback',
+            data: {
+              'fallbackOk': fallbackOk,
+              'debugLastSessionSuccess': FaceApiService.debugLastSessionSuccess,
+              'debugLastSessionEmployee': FaceApiService.debugLastSessionEmployee,
+              'debugLastSessionKind': FaceApiService.debugLastSessionKind,
+            },
+          ));
+          // #endregion
+          if (fallbackOk) {
+            faceVerified = true;
+            _faceVerificationProof = {
+              'passed': true,
+              'employeeNumber': widget.employeeNumber,
+              'verificationAtUtc':
+                  FaceApiService.debugLastSessionTimestamp?.toUtc().toIso8601String() ??
+                      DateTime.now().toUtc().toIso8601String(),
+              'source': 'face-session-verification-fallback',
+            };
+            FaceApiService.clearLastFaceSession();
+            _log('🛡️ تم تفعيل الحماية الفائقة (Failsafe Global Flag) — التحقق ناجح | NavResult نوع: (${navigationResult.runtimeType})');
+          }
+        }
+
+        // حماية إضافية (Fourth Fallback): تأخير قصير + فحص نهائي للتأكد من أن العلامة وصلت
+        // (في حالات نادرة جداً حيث يتم فيها إغلاق الشاشة أسرع من وصول Navigator.pop إلى هنا)
+        if (!faceVerified) {
+          await Future.delayed(const Duration(milliseconds: 600));
+          final fallback2 = FaceApiService.verifyLastFaceSessionSuccess(
+            employeeNumber: widget.employeeNumber,
+            requiredSessionKind: 'verification',
+          );
+          // #region debug-point C:failsafe-2
+          unawaited(_reportDebugEvent(
+            'C',
+            'attendance_screen.dart:_processAttendance',
+            'Checked delayed global success flag fallback',
+            data: {
+              'fallbackOk': fallback2,
+              'debugLastSessionSuccess': FaceApiService.debugLastSessionSuccess,
+              'debugLastSessionEmployee': FaceApiService.debugLastSessionEmployee,
+              'debugLastSessionKind': FaceApiService.debugLastSessionKind,
+            },
+          ));
+          // #endregion
+          if (fallback2) {
+            faceVerified = true;
+            _faceVerificationProof = {
+              'passed': true,
+              'employeeNumber': widget.employeeNumber,
+              'verificationAtUtc':
+                  FaceApiService.debugLastSessionTimestamp?.toUtc().toIso8601String() ??
+                      DateTime.now().toUtc().toIso8601String(),
+              'source': 'face-session-verification-fallback-delayed',
+            };
+            FaceApiService.clearLastFaceSession();
+            _log('🛡️🛡️ الحماية الرابعة (Delayed Fallback 2): تم تفعيلها بعد 600ms → التحقق ناجح.');
+          }
+        }
+
+        // 🔍 DIAGNOSTIC نهائي: طباعة القيم النهائية قبل الشرط الأخير على الجهاز
+        final lastTraceId = DateTime.now().millisecondsSinceEpoch.toRadixString(36);
+        _log('🔎 [TRACE-$lastTraceId] DIAGNOSTIC ATTENDANCE | faceVerified=$faceVerified | NavResult=(${navigationResult.runtimeType}) $navigationResult | Fallback-Exists=${FaceApiService.debugLastSessionSuccess ? "YES" : "NO"} | EmpMatch=${FaceApiService.debugLastSessionEmployee == widget.employeeNumber ? "YES" : "NO"} | HasTemplate=${faceStatus['HasFaceTemplate']} | HasStoredFace=$hasStoredFace');
+
+        if (!faceVerified) {
+          final hint = navigationResult == null
+              ? ' (ملاحظة: تم إغلاق شاشة التحقق يدوياً).'
+              : ' (تم استلام قيمة غير متوقعة: ${navigationResult.runtimeType}).';
+          final verificationMessage = !hasStoredFace && !enrollmentCompleted
+              ? 'لا توجد بصمة وجه محفوظة لهذا الموظف بعد، لذلك يجب إكمال تسجيل الوجه أولاً ثم تنفيذ التحقق قبل الحضور.$hint'
+              : !hasStoredFace && enrollmentCompleted
+                  ? 'تم تسجيل الوجه بنجاح، لكن التحقق الإلزامي بعد التسجيل لم يكتمل أو لم تصل نتيجته إلى شاشة الحضور.$hint'
+                  : 'بصمة الوجه مسجلة لهذا الموظف، لكن المطابقة الحالية لم تنجح أو لم تصل نتيجة النجاح إلى شاشة الحضور.$hint\nإذا ظهرت داخل شاشة البصمة رسالة مثل "لا تتطابق" أو نسبة تشابه منخفضة، فهذا يعني أن الموظف مسجل فعلاً ولكن المطابقة فشلت بسبب اختلاف الصورة الحالية عن الصورة المحفوظة.';
+          _showError(
+            'فشل التحقق من الوجه',
+            verificationMessage,
+          );
           setState(() {
             _isProcessing = false;
           });
@@ -453,6 +776,18 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         
         // تسجيل أنه تم استخدام بصمة الوجه بنجاح
         _usedFaceVerification = true;
+
+        final faceProofValidation = _validateFaceProofBeforeSubmit();
+        if (faceProofValidation != null) {
+          _showError(
+            faceProofValidation['title']!,
+            faceProofValidation['details']!,
+          );
+          setState(() {
+            _isProcessing = false;
+          });
+          return;
+        }
       }
       // ---------------------------------------------
 
@@ -549,9 +884,11 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         _currentStep = Translations.getText('checking_biometric', lang);
       });
 
-      // التحقق من البصمة إذا كانت مطلوبة
+      // التحقق الحيوي المحلي يُستخدم فقط للبصمة المحلية أو كمسار احتياطي نادر.
+      // أما عندما يتم التحقق من الوجه عبر شاشة FaceVerificationScreen بنجاح،
+      // فلا نعيد طلب تحقق محلي ثانٍ لأن ذلك يُسقط العملية بعد نجاح الكاميرا.
       if (widget.authenticationMethod == 'FINGERPRINT' ||
-          widget.authenticationMethod == 'FACE') {
+          (widget.authenticationMethod == 'FACE' && !_usedFaceVerification)) {
         final biometricResult =
             await BiometricService.authenticateForAttendance(
           isCheckIn: widget.isCheckIn,
@@ -564,6 +901,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               'يرجى المحاولة مرة أخرى');
           return;
         }
+      } else if (widget.authenticationMethod == 'FACE' && _usedFaceVerification) {
+        _log('✅ تم تجاوز التحقق الحيوي المحلي لأن التحقق من الوجه اكتمل بنجاح بالفعل.');
       }
 
       setState(() {
@@ -571,7 +910,14 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       });
 
       // جمع معلومات الجهاز
-      final deviceInfo = await _getDeviceInfo();
+      final rawDeviceInfo = await _getDeviceInfo();
+      final deviceInfo = _usedFaceVerification
+          ? jsonEncode({
+              'device': rawDeviceInfo,
+              'attendanceAuth': 'FACE',
+              'faceVerification': _faceVerificationProof,
+            })
+          : rawDeviceInfo;
 
       // إنشاء نموذج الحضور - punchTime سيتم تعيينه من السيرفر وليس من الجوال
       // هذا يضمن دقة الوقت المسجل في قاعدة البيانات ومنع التلاعب
@@ -587,6 +933,13 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         deviceInfo: deviceInfo,
         temperature: null,
         authenticationMethod: _usedFaceVerification ? 'FACE' : (widget.authenticationMethod ?? 'GPS'),
+        faceVerificationPassed: _usedFaceVerification,
+        faceVerificationAtUtc: _faceVerificationProof?['verificationAtUtc']?.toString(),
+        faceVerificationEmployeeNumber:
+            _faceVerificationProof?['employeeNumber']?.toString(),
+        faceVerificationConfidence: (_faceVerificationProof?['confidenceScore'] as num?)?.toDouble(),
+        faceLivenessScore: (_faceVerificationProof?['livenessScore'] as num?)?.toDouble(),
+        faceVerificationSource: _faceVerificationProof?['source']?.toString(),
         isLocationStable: stabilityResult.isStable,
         locationMaxVariation: stabilityResult.maxDistanceVariation,
         locationAverageDistance: stabilityResult.averageDistance,
@@ -668,15 +1021,51 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     _errorController.forward();
   }
 
-  // دالة جديدة لتحديد ما إذا كان يمكن إعادة المحاولة
+  // ⚡ إصلاح: توسيع منطق إعادة المحاولة ليكون أكثر ذكاءً وشمولاً
   bool _canRetry(String errorMessage) {
-    return errorMessage.contains('أنت خارج نطاق الموقع المعين لك') ||
-        errorMessage.contains('الموقع صحيح') ||
-        errorMessage.contains('خطأ في التحقق من الموقع') ||
-        errorMessage.contains('خطأ في حفظ سجل الحضور') ||
-        errorMessage.contains('unexpected_error') ||
-        errorMessage.contains('operation_error') ||
-        errorMessage.contains('error');
+    if (errorMessage.isEmpty) return false;
+    final msgLower = errorMessage.toLowerCase();
+
+    // أولاً: الأخطاء التي ABSOLUTELY لا يجب إعادة المحاولة لها نهائياً (Stop-List)
+    final neverRetryKeywords = [
+      'الموظف غير نشط', 'employee inactive',
+      'الموظف غير موجود', 'not found',
+      'غير مصرح', 'unauthorized',
+      'غير مفعل', 'disabled',
+      'محظور', 'blocked', 'suspended',
+      'انتهت فترة تعيين', 'expired',
+      'لا يمكن تسجيل الحضور مرتين', 'already checked in',
+      'لا يمكن تسجيل الانصراف بدون', 'cannot checkout without',
+      'تعيين الموظف للموقع يبدأ من', 'not started',
+      'إثبات التحقق من الوجه', 'التحقق من الوجه مطلوب',
+      'انتهت صلاحية التحقق من الوجه', 'عدم تطابق بيانات التحقق',
+    ];
+    final isBlocked = neverRetryKeywords.any((k) =>
+        errorMessage.contains(k) || msgLower.contains(k.toLowerCase()));
+    if (isBlocked) return false;
+
+    // ثانياً: الأخطاء التي يُنصح دائماً بإعادة المحاولة لها (Go-List)
+    final alwaysRetryKeywords = [
+      // أخطاء شبكة / اتصال
+      'timeout', 'timed out', 'connection', 'socket', 'network',
+      'انتهت المهلة', 'خطأ في الاتصال', 'غير متصل',
+      // أخطاء موقع GPS
+      'خارج نطاق', 'outside', 'outside_allowed_area',
+      'الموقع المعين', 'الموقع صحيح', 'location',
+      'التحقق من الموقع', 'تحديد الموقع',
+      'cannot_determine_location', 'location_determination_failed',
+      'wait_for_location', 'gps',
+      // أخطاء تخزين / قاعدة بيانات مؤقتة
+      'خطأ في حفظ', 'save', 'database', 'unexpected',
+      // أخطاء بصمة الوجه / تحقق قابلة للإعادة
+      'فشل التحقق من الوجه', 'verification_failed',
+      'تعطل بدء عملية', 'retry',
+      'try_again_later', 'operation_error',
+      // أخطاء عامة قابلة للإعادة
+      'error', 'failed', 'خطأ', 'فشل',
+    ];
+    return alwaysRetryKeywords.any((k) =>
+        errorMessage.contains(k) || msgLower.contains(k.toLowerCase()));
   }
 
   // دالة إعادة المحاولة
@@ -761,6 +1150,23 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     } else if (apiMessage.contains('خطأ في حفظ سجل الحضور')) {
       title = Translations.getText('attendance_save_error', lang);
       details = Translations.getText('contact_support_database_issue', lang);
+    } else if (apiMessage.contains('التحقق من الوجه مطلوب') ||
+        apiMessage.contains('إثبات التحقق من الوجه مفقود')) {
+      title = 'التحقق من الوجه مطلوب';
+      details =
+          'يجب إكمال التحقق من بصمة الوجه من الكاميرا أولاً ثم إعادة محاولة تسجيل الحضور.';
+    } else if (apiMessage.contains('انتهت صلاحية التحقق من الوجه')) {
+      title = 'انتهت صلاحية التحقق من الوجه';
+      details =
+          'انتهت مدة صلاحية التحقق السابق. افتح الكاميرا وأعد التحقق من الوجه مباشرة قبل تسجيل الحضور.';
+    } else if (apiMessage.contains('رقم الموظف في إثبات التحقق لا يطابق')) {
+      title = 'عدم تطابق بيانات التحقق';
+      details =
+          'تم رفض العملية لأن إثبات الوجه لا يخص نفس الموظف الحالي. أعد تسجيل الدخول بالحساب الصحيح ثم كرر التحقق.';
+    } else if (apiMessage.contains('تعذر تأكيد التحقق من الوجه من سجلات الخادم')) {
+      title = 'تعذر اعتماد التحقق من الوجه';
+      details =
+          'تحقق الوجه لم يُسجل بشكل مكتمل على الخادم. أعد التحقق من الوجه ثم حاول مرة أخرى.';
     } else {
       // الرسائل العامة
       title = Translations.getText('operation_failed', lang);

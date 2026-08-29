@@ -5,9 +5,11 @@ import 'dart:typed_data';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/request.dart' as request_models;
 import '../models/api_models.dart' as api_models;
 import '../services/api_service.dart';
+import '../services/approval_permission_service.dart';
 import '../config/api_config.dart';
 import '../widgets/attachments_widget.dart';
 import 'package:provider/provider.dart';
@@ -37,11 +39,181 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
   bool _isLoading = true;
   bool _hasError = false;
   String _errorMessage = '';
+  bool _permissionVerified = false;
+  final Map<String, _ApprovalGateInfo> _approvalGateInfo = {};
+  final Set<String> _approvalGateLoading = {};
+  final Set<String> _cancelledRejectedRequestIds = {};
 
   @override
   void initState() {
     super.initState();
-    _loadPendingRequests();
+    _verifyApprovalPermissionGate();
+  }
+
+  Future<void> _verifyApprovalPermissionGate() async {
+    bool hasPermission = false;
+
+    try {
+      final perm = ApprovalPermissionService.currentCached;
+      if (perm.isValid && perm.verifySignatureIntegrity()) {
+        hasPermission = perm.canApproveForContext(
+          targetClientId: widget.employeeData.clientID,
+          targetEmployeeId: widget.employeeData.employeeID,
+          targetEmployeeNumber: widget.employeeData.employeeNumber,
+        );
+      }
+    } catch (_) {}
+
+    if (!hasPermission) {
+      try {
+        final persisted = await ApprovalPermissionService.loadPersisted();
+        if (persisted != null && persisted.isNotEmpty) {
+          final decoded = SecureApprovalPermission.fromSecureJson(persisted);
+          if (decoded.isValid && decoded.verifySignatureIntegrity()) {
+            hasPermission = decoded.canApproveForContext(
+              targetClientId: widget.employeeData.clientID,
+              targetEmployeeId: widget.employeeData.employeeID,
+              targetEmployeeNumber: widget.employeeData.employeeNumber,
+            );
+            if (hasPermission) {
+              ApprovalPermissionService.updateCached(decoded);
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (!hasPermission) {
+      try {
+        final embedded = widget.employeeData.embeddedApprovalPermission;
+        if (embedded != null &&
+            embedded.isValid &&
+            embedded.verifySignatureIntegrity()) {
+          hasPermission = embedded.canApproveForContext(
+            targetClientId: widget.employeeData.clientID,
+            targetEmployeeId: widget.employeeData.employeeID,
+            targetEmployeeNumber: widget.employeeData.employeeNumber,
+          );
+          if (hasPermission) {
+            ApprovalPermissionService.updateCached(embedded);
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (!hasPermission) {
+      final rules = (widget.employeeData.rules).toLowerCase();
+      final serverProbe = await ApiService.getPendingRequestsForApproval(
+        widget.employeeData.clientID,
+        approverId: int.tryParse(widget.employeeData.employeeNumber) ??
+            widget.employeeData.employeeID,
+      ).catchError((_) => <String, dynamic>{'Success': false, 'Data': []});
+      final probeData = serverProbe['Data'] as List<dynamic>?;
+      final hasAccess = serverProbe['HasApprovalAccess'] == true ||
+          (serverProbe['HasApprovalAccess'] is String &&
+              serverProbe['HasApprovalAccess'].toString().toLowerCase() ==
+                  'true') ||
+          (probeData != null && probeData.isNotEmpty);
+      if (hasAccess) {
+        final finalPerm = ApprovalPermissionService.evaluateApproverFromSignals(
+          clientId: widget.employeeData.clientID,
+          employeeId: widget.employeeData.employeeID,
+          employeeNumber: widget.employeeData.employeeNumber,
+          rulesRaw: rules,
+          serverApprovalAccess: serverProbe['HasApprovalAccess'] == true ||
+              (serverProbe['HasApprovalAccess'] is String &&
+                  serverProbe['HasApprovalAccess']
+                      .toString()
+                      .toLowerCase() ==
+                      'true'),
+          pendingApprovalItems: probeData ?? const [],
+        );
+        hasPermission = finalPerm.isValid &&
+            finalPerm.verifySignatureIntegrity() &&
+            finalPerm.isApprover;
+        if (hasPermission) {
+          ApprovalPermissionService.updateCached(finalPerm);
+          try {
+            await ApprovalPermissionService.persistSecurely(
+                finalPerm.toSecureJson());
+          } catch (_) {}
+        }
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _permissionVerified = true;
+      _hasError = !hasPermission;
+      _errorMessage = hasPermission
+          ? ''
+          : Translations.getText(
+              'approvals_no_permission',
+              Provider.of<LanguageService>(context, listen: false)
+                  .currentLocale
+                  .languageCode,
+            ).isEmpty
+              ? 'ليس لديك صلاحية للوصول إلى قسم الموافقات'
+              : Translations.getText(
+                  'approvals_no_permission',
+                  Provider.of<LanguageService>(context, listen: false)
+                      .currentLocale
+                      .languageCode,
+                );
+      _isLoading = false;
+    });
+
+    if (hasPermission) {
+      _loadPendingRequests();
+    }
+  }
+
+  Future<void> _denyAccessAndPop() async {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.lock_outline, color: Colors.white, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _errorMessage.isEmpty
+                    ? 'ليس لديك صلاحية للوصول إلى قسم الموافقات'
+                    : _errorMessage,
+                style: const TextStyle(
+                  fontFamily: 'Tajawal',
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: Colors.redAccent,
+        duration: const Duration(seconds: 3),
+      ),
+    );
+    await Future.delayed(const Duration(milliseconds: 400));
+    if (mounted) Navigator.of(context).maybePop();
+  }
+
+  String get _cancelledRejectedPrefsKey =>
+      'cancelled_rejected_requests_${widget.employeeData.clientID}_${widget.employeeData.employeeID}';
+
+  Future<void> _loadCancelledRejectedRequestIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    final ids = prefs.getStringList(_cancelledRejectedPrefsKey) ?? const <String>[];
+    _cancelledRejectedRequestIds
+      ..clear()
+      ..addAll(ids);
+  }
+
+  Future<void> _saveCancelledRejectedRequestIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(
+      _cancelledRejectedPrefsKey,
+      _cancelledRejectedRequestIds.toList(),
+    );
   }
 
   Future<void> _loadPendingRequests() async {
@@ -51,12 +223,23 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
     });
 
     try {
+      await _loadCancelledRejectedRequestIds();
+
       // جلب الطلبات المعلقة من API
-      final requests = await _fetchPendingRequestsFromAPI();
+      final result = await _fetchPendingRequestsFromAPI();
+      final filtered = result.requests
+          .where((r) =>
+              !(r.status == request_models.RequestStatus.rejected &&
+                  _cancelledRejectedRequestIds.contains(r.id)))
+          .toList();
       setState(() {
-        _pendingRequests = requests;
+        _pendingRequests = filtered;
+        _approvalGateInfo
+          ..clear()
+          ..addAll(result.gateInfo);
         _isLoading = false;
       });
+      _prefetchApprovalGateInfo(filtered);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -70,8 +253,209 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
     }
   }
 
-  Future<List<request_models.EmployeeRequest>>
-      _fetchPendingRequestsFromAPI() async {
+  void _prefetchApprovalGateInfo(List<request_models.EmployeeRequest> requests) {
+    for (final r in requests) {
+      _loadApprovalGateInfo(r.id);
+    }
+  }
+
+  Future<_ApprovalGateInfo?> _loadApprovalGateInfo(String requestId) async {
+    if (_approvalGateInfo.containsKey(requestId) ||
+        _approvalGateLoading.contains(requestId)) {
+      return _approvalGateInfo[requestId];
+    }
+
+    _approvalGateLoading.add(requestId);
+    try {
+      final response = await ApiService.getApprovalDetails(
+        widget.employeeData.clientID,
+        requestId,
+      );
+
+      if (response['Success'] == true) {
+        final data = response['Data'];
+        final approvalsRaw = data is Map<String, dynamic> ? data['Approvals'] : null;
+        final approvals = approvalsRaw is List ? approvalsRaw : const <dynamic>[];
+        final info = _computeApprovalGateInfo(approvals);
+        if (mounted) {
+          setState(() {
+            _approvalGateInfo[requestId] = info;
+          });
+        } else {
+          _approvalGateInfo[requestId] = info;
+        }
+        return info;
+      }
+
+      return null;
+    } finally {
+      _approvalGateLoading.remove(requestId);
+    }
+  }
+
+  _ApprovalGateInfo _computeApprovalGateInfo(List approvals) {
+    final approverIdCandidates = <int>{widget.employeeData.employeeID};
+    final employeeNumberInt = int.tryParse(widget.employeeData.employeeNumber);
+    if (employeeNumberInt != null) {
+      approverIdCandidates.add(employeeNumberInt);
+    }
+
+    int? myStepOrder;
+    int? minPendingStepOrder;
+    int? firstStepOrder;
+    final stepOrders = <int>{};
+
+    final parsed = approvals
+        .whereType<Map>()
+        .map((a) => Map<String, dynamic>.from(a as Map))
+        .toList();
+
+    for (final a in parsed) {
+      final step = a['StepOrder'];
+      final status = (a['Status']?.toString() ?? '').trim();
+      final stepOrder = step is int ? step : int.tryParse(step?.toString() ?? '');
+      if (stepOrder == null) continue;
+
+      stepOrders.add(stepOrder);
+      firstStepOrder = firstStepOrder == null ? stepOrder : min(firstStepOrder!, stepOrder);
+
+      if (status.toLowerCase() == 'pending') {
+        minPendingStepOrder = minPendingStepOrder == null
+            ? stepOrder
+            : min(minPendingStepOrder!, stepOrder);
+      }
+
+      final aApproverId = a['ApproverID'];
+      final aApproverIdInt = aApproverId is int ? aApproverId : int.tryParse(aApproverId?.toString() ?? '');
+      if (aApproverIdInt != null &&
+          approverIdCandidates.contains(aApproverIdInt) &&
+          status.toLowerCase() == 'pending') {
+        myStepOrder = myStepOrder == null ? stepOrder : min(myStepOrder!, stepOrder);
+      }
+    }
+
+    if (myStepOrder == null || firstStepOrder == null) {
+      return const _ApprovalGateInfo.unknown();
+    }
+
+    final isSecondOrLater = myStepOrder! > firstStepOrder!;
+    final sortedSteps = stepOrders.toList()..sort();
+    final totalSteps = sortedSteps.length;
+    int completedSteps = 0;
+    if (totalSteps > 0) {
+      if (minPendingStepOrder == null) {
+        completedSteps = totalSteps;
+      } else {
+        final idx = sortedSteps.indexOf(minPendingStepOrder!);
+        completedSteps = idx >= 0 ? idx : 0;
+      }
+    }
+
+    bool firstStepApproved = false;
+    final firstStepApprovals = parsed.where((a) {
+      final step = a['StepOrder'];
+      final stepOrder = step is int ? step : int.tryParse(step?.toString() ?? '');
+      return stepOrder == firstStepOrder;
+    }).toList();
+
+    if (firstStepApprovals.isNotEmpty) {
+      firstStepApproved = firstStepApprovals.every((a) {
+        final status = (a['Status']?.toString() ?? '').trim().toLowerCase();
+        return status == 'approved';
+      });
+    }
+
+    String? blockedByNames;
+    bool canAct = true;
+    if (minPendingStepOrder != null && myStepOrder != minPendingStepOrder) {
+      canAct = false;
+      final blockingStep = minPendingStepOrder!;
+      final names = parsed.where((a) {
+        final step = a['StepOrder'];
+        final status = (a['Status']?.toString() ?? '').trim().toLowerCase();
+        final stepOrder = step is int ? step : int.tryParse(step?.toString() ?? '');
+        return stepOrder == blockingStep && status != 'approved';
+      }).map((a) => (a['ApproverName']?.toString() ?? '').trim()).where((n) => n.isNotEmpty).toSet().toList();
+      if (names.isNotEmpty) {
+        blockedByNames = names.join('، ');
+      }
+    }
+
+    return _ApprovalGateInfo(
+      canAct: canAct,
+      myStepOrder: myStepOrder,
+      currentStepOrder: minPendingStepOrder,
+      isSecondOrLater: isSecondOrLater,
+      firstStepApproved: firstStepApproved,
+      blockedByNames: blockedByNames,
+      totalSteps: totalSteps,
+      completedSteps: completedSteps,
+    );
+  }
+
+  Future<bool> _ensureCanActOnRequest(request_models.EmployeeRequest request) async {
+    final languageService = Provider.of<LanguageService>(context, listen: false);
+    final lang = languageService.currentLocale.languageCode;
+
+    final info = _approvalGateInfo[request.id] ?? await _loadApprovalGateInfo(request.id);
+    if (info == null) return true;
+    if (info.isUnknown) return true;
+
+    if (!info.canAct) {
+      final message = info.blockedByNames != null && info.blockedByNames!.isNotEmpty
+          ? 'لا يمكنك اتخاذ إجراء الآن. الطلب بانتظار موافقة: ${info.blockedByNames}.'
+          : 'لا يمكنك اتخاذ إجراء الآن. الطلب بانتظار موافقة المعتمد السابق.';
+
+      if (mounted) {
+        await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(Translations.getText('cannot_approve_now', lang)),
+            content: Text(message),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text(Translations.getText('ok', lang)),
+              ),
+            ],
+          ),
+        );
+      }
+      return false;
+    }
+
+    return true;
+  }
+
+  String _formatApprovalErrorMessage(String rawMessage) {
+    var msg = rawMessage.trim();
+    msg = msg.replaceFirst(RegExp(r'^\s*this\s*:\s*', caseSensitive: false), '');
+    msg = msg.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+    final lower = msg.toLowerCase();
+
+    if (msg.contains('لا يمكن الموافقة/الرفض قبل موافقة المعتمد السابق') ||
+        msg.contains('لا يمكن الموافقة قبل موافقة المعتمد السابق')) {
+      return 'لا يمكنك الموافقة الآن لأن الطلب بانتظار موافقة المعتمد السابق حسب التسلسل.';
+    }
+
+    if (lower.contains('sqltransaction has completed')) {
+      return 'لا يمكنك الموافقة الآن لأن الطلب بانتظار موافقة المعتمد السابق. حدّث الصفحة وحاول بعد موافقته.';
+    }
+
+    if (msg.contains('لا توجد موافقة معلقة لهذا المعتمد')) {
+      return 'لا يمكنك تنفيذ الإجراء لأن هذا الطلب ليس ضمن قائمة الموافقات الخاصة بك حالياً. حدّث القائمة ثم حاول مرة أخرى.';
+    }
+
+    if (lower.contains('timeout') || msg.contains('انتهت مهلة')) {
+      return 'تعذر الاتصال بالخادم. حاول مرة أخرى.';
+    }
+
+    if (msg.isEmpty) return 'تعذر تنفيذ العملية حالياً. حاول مرة أخرى.';
+    return msg;
+  }
+
+  Future<_PendingRequestsResult> _fetchPendingRequestsFromAPI() async {
     final languageService = Provider.of<LanguageService>(context, listen: false);
     final lang = languageService.currentLocale.languageCode;
     try {
@@ -79,10 +463,14 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       print('👤 المعتمد: ${widget.employeeData.employeeID}');
       print('🏢 Client ID: ${widget.employeeData.clientID}');
 
+      final approverIdToSend =
+          int.tryParse(widget.employeeData.employeeNumber) ??
+              widget.employeeData.employeeID;
+
       // استخدام API لجلب الطلبات المعلقة للموافقة للمعتمد الحالي
       final response = await ApiService.getPendingRequestsForApproval(
         widget.employeeData.clientID,
-        approverId: widget.employeeData.employeeID, // المعتمد الحالي
+        approverId: approverIdToSend, // المعتمد الحالي
       );
 
       print('📡 استجابة جلب الطلبات المعلقة: $response');
@@ -90,15 +478,61 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       if (response['Success'] == true) {
         final List<dynamic> data = response['Data'] ?? [];
         print('✅ تم جلب ${data.length} طلب معلق');
-        return data.map((json) => _parseRequestFromAPI(json)).toList();
+        final requests = <request_models.EmployeeRequest>[];
+        final gateInfo = <String, _ApprovalGateInfo>{};
+
+        for (final item in data) {
+          if (item is! Map<String, dynamic>) continue;
+
+          final request = _parseRequestFromAPI(item);
+          requests.add(request);
+
+          final totalSteps = int.tryParse(item['TotalSteps']?.toString() ?? '') ??
+              (item['TotalSteps'] is int ? item['TotalSteps'] as int : 0);
+          final completedSteps = int.tryParse(item['CompletedSteps']?.toString() ?? '') ??
+              (item['CompletedSteps'] is int ? item['CompletedSteps'] as int : 0);
+          final currentStepOrder = int.tryParse(item['CurrentStepOrder']?.toString() ?? '') ??
+              (item['CurrentStepOrder'] is int ? item['CurrentStepOrder'] as int : 0);
+          final firstStepOrder = int.tryParse(item['FirstStepOrder']?.toString() ?? '') ??
+              (item['FirstStepOrder'] is int ? item['FirstStepOrder'] as int : 0);
+          final myStepOrder = int.tryParse(item['MyStepOrder']?.toString() ?? '') ??
+              (item['MyStepOrder'] is int ? item['MyStepOrder'] as int : 0);
+          final firstStepApprovedRaw = item['FirstStepApproved'];
+          final firstStepApproved = firstStepApprovedRaw == true ||
+              (firstStepApprovedRaw is String &&
+                  firstStepApprovedRaw.toLowerCase() == 'true');
+
+          if (totalSteps > 0) {
+            final canAct = myStepOrder > 0 && currentStepOrder > 0
+                ? myStepOrder == currentStepOrder
+                : true;
+            gateInfo[request.id] = _ApprovalGateInfo(
+              canAct: canAct,
+              myStepOrder: myStepOrder > 0 ? myStepOrder : null,
+              currentStepOrder: currentStepOrder > 0 ? currentStepOrder : null,
+              isSecondOrLater:
+                  myStepOrder > 0 && firstStepOrder > 0 && myStepOrder > firstStepOrder,
+              firstStepApproved: firstStepApproved,
+              blockedByNames: null,
+              totalSteps: totalSteps,
+              completedSteps: completedSteps,
+            );
+          }
+        }
+
+        return _PendingRequestsResult(
+          requests: requests,
+          gateInfo: gateInfo,
+        );
       } else {
-        print('❌ فشل في جلب الطلبات المعلقة: ${response['Message']}');
-        return [];
+        final message =
+            (response['Message'] ?? 'فشل في جلب الطلبات المعلقة').toString();
+        print('❌ فشل في جلب الطلبات المعلقة: $message');
+        throw Exception(message);
       }
     } catch (e) {
-      // في حالة فشل API، نرجع قائمة فارغة
       print('💥 فشل في جلب الطلبات المعلقة من API: $e');
-      return [];
+      rethrow;
     }
   }
 
@@ -217,6 +651,9 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
     final languageService = Provider.of<LanguageService>(context, listen: false);
     final lang = languageService.currentLocale.languageCode;
 
+    final canAct = await _ensureCanActOnRequest(request);
+    if (!canAct) return;
+
     // إظهار dialog للتأكيد
     final confirmed = await showDialog<bool>(
       context: context,
@@ -323,23 +760,26 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content:
-                  Text(response['Message'] ?? 'تمت الموافقة على الطلب بنجاح'),
+                  Text(response['Message'] ?? Translations.getText('request_approved_success', lang)),
               backgroundColor: Colors.green,
             ),
           );
         }
       } else {
-        final message = (response['Message'] ?? 'فشل في الموافقة على الطلب').toString();
+        final message = (response['Message'] ??
+                Translations.getText('approval_failed', lang))
+            .toString();
+        final formatted = _formatApprovalErrorMessage(message);
         if (mounted) {
           await showDialog(
             context: context,
             builder: (context) => AlertDialog(
-              title: const Text('لا يمكن الموافقة الآن'),
-              content: Text(message),
+              title: Text(Translations.getText('cannot_approve_now', lang)),
+              content: Text(formatted),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('حسناً'),
+                  child: Text(Translations.getText('ok', lang)),
                 ),
               ],
             ),
@@ -351,10 +791,17 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       Navigator.of(context).pop();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('فشل في الموافقة على الطلب'),
-            backgroundColor: Colors.red,
+        await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(Translations.getText('cannot_approve_now', lang)),
+            content: Text(_formatApprovalErrorMessage(e.toString())),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text(Translations.getText('ok', lang)),
+              ),
+            ],
           ),
         );
       }
@@ -364,6 +811,10 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
   Future<void> _rejectRequest(request_models.EmployeeRequest request) async {
     final languageService = Provider.of<LanguageService>(context, listen: false);
     final lang = languageService.currentLocale.languageCode;
+
+    final canAct = await _ensureCanActOnRequest(request);
+    if (!canAct) return;
+
     // إظهار dialog للتأكيد أولاً
     final confirmed = await showDialog<bool>(
       context: context,
@@ -491,12 +942,12 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
-        return const AlertDialog(
+        return AlertDialog(
           content: Row(
             children: [
-              CircularProgressIndicator(),
-              SizedBox(width: 16),
-              Text('جاري معالجة الطلب...'),
+              const CircularProgressIndicator(),
+              const SizedBox(width: 16),
+              Text(Translations.getText('approving_request', lang)),
             ],
           ),
         );
@@ -538,23 +989,27 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(response['Message'] ?? 'تم رفض الطلب بنجاح'),
+              content:
+                  Text(response['Message'] ?? Translations.getText('request_rejected_success', lang)),
               backgroundColor: Colors.orange,
             ),
           );
         }
       } else {
-        final message = (response['Message'] ?? 'فشل في رفض الطلب').toString();
+        final message =
+            (response['Message'] ?? Translations.getText('rejection_failed', lang))
+                .toString();
+        final formatted = _formatApprovalErrorMessage(message);
         if (mounted) {
           await showDialog(
             context: context,
             builder: (context) => AlertDialog(
-              title: const Text('لا يمكن الرفض الآن'),
-              content: Text(message),
+              title: Text(Translations.getText('cannot_reject_now', lang)),
+              content: Text(formatted),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('حسناً'),
+                  child: Text(Translations.getText('ok', lang)),
                 ),
               ],
             ),
@@ -566,10 +1021,17 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       Navigator.of(context).pop();
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('فشل في رفض الطلب'),
-            backgroundColor: Colors.red,
+        await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(Translations.getText('cannot_reject_now', lang)),
+            content: Text(_formatApprovalErrorMessage(e.toString())),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text(Translations.getText('ok', lang)),
+              ),
+            ],
           ),
         );
       }
@@ -666,7 +1128,7 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
             ),
             const SizedBox(height: 16),
             Text(
-              'حدث خطأ',
+              Translations.getText('error_occurred', lang),
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 8),
@@ -682,7 +1144,7 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
             ElevatedButton.icon(
               onPressed: _loadPendingRequests,
               icon: const Icon(Icons.refresh),
-              label: const Text('إعادة المحاولة'),
+              label: Text(Translations.getText('retry', lang)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF0EA5E9),
                 foregroundColor: Colors.white,
@@ -720,9 +1182,9 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
               ),
             ),
             const SizedBox(height: 8),
-            const Text(
-              'جميع الطلبات تمت معالجتها',
-              style: TextStyle(
+            Text(
+              Translations.getText('all_requests_processed', lang),
+              style: const TextStyle(
                 fontSize: 14,
                 color: Colors.grey,
               ),
@@ -731,7 +1193,7 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
             ElevatedButton.icon(
               onPressed: _loadPendingRequests,
               icon: const Icon(Icons.refresh),
-              label: const Text('تحديث'),
+              label: Text(Translations.getText('refresh', lang)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF0EA5E9),
                 foregroundColor: Colors.white,
@@ -822,9 +1284,56 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
 
   Widget _buildRequestCard(request_models.EmployeeRequest request) {
     try {
+      final lang =
+          Provider.of<LanguageService>(context, listen: false).currentLocale.languageCode;
       // تحديد حالة الطلب
       final bool canApprove =
           request.status == request_models.RequestStatus.pending;
+      final gateInfo = _approvalGateInfo[request.id];
+      final bool canActOnThisRequest =
+          gateInfo == null || gateInfo.isUnknown || gateInfo.canAct;
+      String? gateIndicatorText;
+      Color? gateIndicatorColor;
+      IconData? gateIndicatorIcon;
+      String? gateProgressText;
+      Color? gateProgressColor;
+      IconData? gateProgressIcon;
+      String? firstApproverStatusText;
+      Color? firstApproverStatusColor;
+      IconData? firstApproverStatusIcon;
+
+      if (gateInfo != null &&
+          !gateInfo.isUnknown &&
+          gateInfo.totalSteps > 1) {
+        gateProgressText = 'الاعتمادات: ${gateInfo.completedSteps}/${gateInfo.totalSteps}';
+        gateProgressColor = gateInfo.completedSteps > 0
+            ? const Color(0xFF10B981)
+            : const Color(0xFFF59E0B);
+        gateProgressIcon = Icons.format_list_numbered;
+
+        if (gateInfo.totalSteps >= 2) {
+          firstApproverStatusText = gateInfo.firstStepApproved
+              ? 'اعتماد المعتمد الأول: تم'
+              : 'اعتماد المعتمد الأول: لم يتم';
+          firstApproverStatusColor = gateInfo.firstStepApproved
+              ? const Color(0xFF10B981)
+              : const Color(0xFFF59E0B);
+          firstApproverStatusIcon = gateInfo.firstStepApproved
+              ? Icons.verified
+              : Icons.pending_actions;
+        }
+      }
+
+      if (gateInfo != null && !gateInfo.isUnknown && gateInfo.isSecondOrLater) {
+        if (!gateInfo.canAct) {
+          gateIndicatorText = gateInfo.blockedByNames != null &&
+                  gateInfo.blockedByNames!.isNotEmpty
+              ? 'بانتظار موافقة: ${gateInfo.blockedByNames}'
+              : 'بانتظار موافقة المعتمد الأول';
+          gateIndicatorColor = const Color(0xFFF59E0B);
+          gateIndicatorIcon = Icons.lock_clock;
+        }
+      }
 
       return Container(
         margin: const EdgeInsets.only(bottom: 16),
@@ -899,33 +1408,156 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                           ],
                         ),
                       ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color:
-                              _getStatusColor(request.status).withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              _getStatusIcon(request.status),
-                              size: 16,
-                              color: _getStatusColor(request.status),
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: _getStatusColor(request.status)
+                                  .withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(12),
                             ),
-                            const SizedBox(width: 4),
-                            Text(
-                              _getStatusText(request.status.toString()),
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: _getStatusColor(request.status),
-                                fontWeight: FontWeight.w600,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  _getStatusIcon(request.status),
+                                  size: 16,
+                                  color: _getStatusColor(request.status),
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _getStatusText(request.status.name),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: _getStatusColor(request.status),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (gateIndicatorText != null) ...[
+                            const SizedBox(height: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: gateIndicatorColor!.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: gateIndicatorColor!.withOpacity(0.25),
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    gateIndicatorIcon!,
+                                    size: 14,
+                                    color: gateIndicatorColor,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    gateIndicatorText!,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: gateIndicatorColor,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ],
-                        ),
+                          if (gateProgressText != null) ...[
+                            const SizedBox(height: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: gateProgressColor!.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: gateProgressColor!.withOpacity(0.25),
+                                ),
+                              ),
+                              child: ConstrainedBox(
+                                constraints:
+                                    const BoxConstraints(maxWidth: 220),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      gateProgressIcon!,
+                                      size: 14,
+                                      color: gateProgressColor,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Flexible(
+                                      child: Text(
+                                        gateProgressText!,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: gateProgressColor,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                          if (firstApproverStatusText != null) ...[
+                            const SizedBox(height: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color:
+                                    firstApproverStatusColor!.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: firstApproverStatusColor!
+                                      .withOpacity(0.25),
+                                ),
+                              ),
+                              child: ConstrainedBox(
+                                constraints:
+                                    const BoxConstraints(maxWidth: 220),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      firstApproverStatusIcon!,
+                                      size: 14,
+                                      color: firstApproverStatusColor,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Flexible(
+                                      child: Text(
+                                        firstApproverStatusText!,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: firstApproverStatusColor,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     ],
                   ),
@@ -956,12 +1588,18 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                       children: [
                         Expanded(
                           child: ElevatedButton.icon(
-                            onPressed: () => _approveRequest(request),
+                            onPressed: canActOnThisRequest
+                                ? () => _approveRequest(request)
+                                : null,
                             icon: const Icon(Icons.check, size: 16),
-                            label: const Text('موافقة'),
+                            label: Text(Translations.getText('approve', lang)),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: const Color(0xFF10B981),
                               foregroundColor: Colors.white,
+                              disabledBackgroundColor:
+                                  const Color(0xFF10B981).withOpacity(0.35),
+                              disabledForegroundColor:
+                                  Colors.white.withOpacity(0.9),
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(8),
                               ),
@@ -971,12 +1609,18 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                         const SizedBox(width: 12),
                         Expanded(
                           child: ElevatedButton.icon(
-                            onPressed: () => _rejectRequest(request),
+                            onPressed: canActOnThisRequest
+                                ? () => _rejectRequest(request)
+                                : null,
                             icon: const Icon(Icons.close, size: 16),
-                            label: const Text('رفض'),
+                            label: Text(Translations.getText('reject', lang)),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: const Color(0xFFEF4444),
                               foregroundColor: Colors.white,
+                              disabledBackgroundColor:
+                                  const Color(0xFFEF4444).withOpacity(0.35),
+                              disabledForegroundColor:
+                                  Colors.white.withOpacity(0.9),
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(8),
                               ),
@@ -1018,6 +1662,23 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                         ],
                       ),
                     ),
+                    if (request.status == request_models.RequestStatus.rejected) ...[
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: OutlinedButton.icon(
+                          onPressed: () => _cancelRejectedRequestCard(request),
+                          icon: const Icon(Icons.block, size: 16),
+                          label: const Text('إلغاء'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF6B7280),
+                            side: BorderSide(
+                              color: const Color(0xFF6B7280).withOpacity(0.4),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ],
               ),
@@ -1066,6 +1727,53 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
         ),
       );
     }
+  }
+
+  Future<void> _cancelRejectedRequestCard(
+      request_models.EmployeeRequest request) async {
+    if (request.status != request_models.RequestStatus.rejected) return;
+
+    final lang = Provider.of<LanguageService>(context, listen: false)
+        .currentLocale
+        .languageCode;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('إلغاء الطلب'),
+        content: const Text('سيتم إلغاء عرض هذا الطلب ولن يظهر لك مرة أخرى.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(Translations.getText('cancel', lang)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('إلغاء'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    _cancelledRejectedRequestIds.add(request.id);
+    await _saveCancelledRejectedRequestIds();
+
+    if (!mounted) return;
+
+    setState(() {
+      _pendingRequests.removeWhere((r) => r.id == request.id);
+    });
+
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('تم الإلغاء ولن يظهر الطلب مرة أخرى')),
+    );
   }
 
   Color _getRequestTypeColor(request_models.RequestType type) {
@@ -1128,17 +1836,20 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
   }
 
   void _showRequestDetails(request_models.EmployeeRequest request) async {
+    final lang = Provider.of<LanguageService>(context, listen: false)
+        .currentLocale
+        .languageCode;
     // إظهار loading dialog
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
-        return const AlertDialog(
+        return AlertDialog(
           content: Row(
             children: [
-              CircularProgressIndicator(),
-              SizedBox(width: 16),
-              Text('جاري تحميل تفاصيل الطلب...'),
+              const CircularProgressIndicator(),
+              const SizedBox(width: 16),
+              Text(Translations.getText('loading_request_details', lang)),
             ],
           ),
         );
@@ -1154,7 +1865,13 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
         Navigator.of(context).pop(); // إغلاق loading dialog
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('خطأ في معرف الطلب: ${request.id}'),
+            content: Text(
+              Translations.getTextWithParams(
+                'invalid_request_id_with_id',
+                lang,
+                {'id': request.id},
+              ),
+            ),
             backgroundColor: Colors.red,
           ),
         );
@@ -1169,8 +1886,8 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
 
       if (requestDetails == null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('لا توجد بيانات متاحة للطلب'),
+          SnackBar(
+            content: Text(Translations.getText('no_request_data_available', lang)),
             backgroundColor: Colors.orange,
           ),
         );
@@ -1338,7 +2055,7 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                                   'الحالة:',
                                   requestData?['Status']?.toString() ??
                                       _getStatusText(
-                                          request.status.toString())),
+                                          request.status.name)),
                               if (requestData?['Description'] != null &&
                                   requestData!['Description']
                                       .toString()
@@ -1493,7 +2210,7 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                                           _approveRequest(request);
                                         },
                                         icon: const Icon(Icons.check, size: 16),
-                                        label: const Text('موافقة'),
+                                        label: Text(Translations.getText('approve', lang)),
                                         style: ElevatedButton.styleFrom(
                                           backgroundColor:
                                               const Color(0xFF10B981),
@@ -1513,7 +2230,7 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                                           _rejectRequest(request);
                                         },
                                         icon: const Icon(Icons.close, size: 16),
-                                        label: const Text('رفض'),
+                                        label: Text(Translations.getText('reject', lang)),
                                         style: ElevatedButton.styleFrom(
                                           backgroundColor:
                                               const Color(0xFFEF4444),
@@ -1547,7 +2264,13 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       // عرض رسالة خطأ
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('حدث خطأ في تحميل تفاصيل الطلب: $e'),
+          content: Text(
+            Translations.getTextWithParams(
+              'error_loading_request_details_with_error',
+              lang,
+              {'error': e.toString()},
+            ),
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -1694,7 +2417,8 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       statusText = 'غير محدد';
       statusIcon = Icons.help;
     } else {
-      switch (status.toLowerCase()) {
+      final normalizedStatus = _normalizeStatusKey(status);
+      switch (normalizedStatus) {
         case 'pending':
           statusColor = const Color(0xFFF59E0B);
           statusText = 'معلق';
@@ -1747,16 +2471,42 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
     );
   }
 
+  String _normalizeStatusKey(String status) {
+    final raw = status.trim();
+    if (raw.isEmpty) return '';
+
+    final lower = raw.toLowerCase();
+    final lastPart = lower.contains('.') ? lower.split('.').last : lower;
+
+    if (lastPart.contains('معلق')) return 'pending';
+    if (lastPart.contains('موافق') || lastPart.contains('قبول')) {
+      return 'approved';
+    }
+    if (lastPart.contains('مرفوض') || lastPart.contains('رفض')) {
+      return 'rejected';
+    }
+    if (lastPart.contains('ملغي') || lastPart.contains('إلغاء')) {
+      return 'cancelled';
+    }
+
+    if (lastPart == 'canceled') return 'cancelled';
+
+    return lastPart;
+  }
+
   String _getStatusText(String status) {
     if (status.isEmpty) return 'غير محدد';
 
-    switch (status.toLowerCase()) {
+    final normalizedStatus = _normalizeStatusKey(status);
+    switch (normalizedStatus) {
       case 'pending':
         return 'معلق';
       case 'approved':
         return 'موافق عليه';
       case 'rejected':
         return 'مرفوض';
+      case 'cancelled':
+        return 'ملغي';
       case 'completed':
         return 'مكتمل';
       default:
@@ -2439,13 +3189,16 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
 
   Future<void> _viewAttachment(
       Map<String, dynamic> attachment, int requestId) async {
+    final lang = Provider.of<LanguageService>(context, listen: false)
+        .currentLocale
+        .languageCode;
     try {
       final fileName = attachment['FileName'] as String? ??
           attachment['Name'] as String? ??
-          'ملف غير محدد';
+          Translations.getText('file_not_specified', lang);
       final fileType = attachment['FileType'] as String? ??
           attachment['Type'] as String? ??
-          'غير محدد';
+          Translations.getText('not_specified', lang);
       final attachmentId =
           attachment['ID'] as int? ?? attachment['AttachmentID'] as int? ?? 0;
 
@@ -2455,7 +3208,7 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       final action = await showDialog<String>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('خيارات المرفق'),
+          title: Text(Translations.getText('attachment_options', lang)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2463,24 +3216,30 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                 leading: Icon(_getFileTypeIcon(fileType),
                     color: _getFileTypeColor(fileType)),
                 title: Text(fileName),
-                subtitle: Text('نوع الملف: $fileType'),
+                subtitle: Text(
+                  Translations.getTextWithParams(
+                    'file_type_with_value',
+                    lang,
+                    {'type': fileType},
+                  ),
+                ),
               ),
               const SizedBox(height: 16),
-              const Text('اختر الإجراء المطلوب:'),
+              Text(Translations.getText('choose_action', lang)),
             ],
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop('download'),
-              child: const Text('تحميل'),
+              child: Text(Translations.getText('download', lang)),
             ),
             TextButton(
               onPressed: () => Navigator.of(context).pop('view'),
-              child: const Text('عرض'),
+              child: Text(Translations.getText('view', lang)),
             ),
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('إلغاء'),
+              child: Text(Translations.getText('cancel', lang)),
             ),
           ],
         ),
@@ -2497,7 +3256,13 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       print('❌ خطأ في معالجة المرفق: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('خطأ في معالجة المرفق: $e'),
+          content: Text(
+            Translations.getTextWithParams(
+              'error_processing_attachment_with_error',
+              lang,
+              {'error': e.toString()},
+            ),
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -2507,10 +3272,13 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
   // تحميل المرفق
   Future<void> _downloadAttachment(
       Map<String, dynamic> attachment, int requestId) async {
+    final lang = Provider.of<LanguageService>(context, listen: false)
+        .currentLocale
+        .languageCode;
     try {
       final fileName = attachment['FileName'] as String? ??
           attachment['Name'] as String? ??
-          'ملف غير محدد';
+          Translations.getText('file_not_specified', lang);
       final attachmentId =
           attachment['ID'] as int? ?? attachment['AttachmentID'] as int? ?? 0;
 
@@ -2525,8 +3293,8 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       final status = await Permission.storage.request();
       if (!status.isGranted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('يجب منح إذن الكتابة لتحميل الملفات'),
+          SnackBar(
+            content: Text(Translations.getText('write_permission_required', lang)),
             backgroundColor: Colors.red,
           ),
         );
@@ -2544,7 +3312,13 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
               const SizedBox(width: 16),
-              Text('جاري تحميل: $fileName'),
+              Text(
+                Translations.getTextWithParams(
+                  'downloading_file',
+                  lang,
+                  {'fileName': fileName},
+                ),
+              ),
             ],
           ),
           duration: const Duration(seconds: 2),
@@ -2577,7 +3351,13 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
 
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('تم تحميل: $fileName'),
+              content: Text(
+                Translations.getTextWithParams(
+                  'downloaded_file',
+                  lang,
+                  {'fileName': fileName},
+                ),
+              ),
               backgroundColor: Colors.green,
             ),
           );
@@ -2585,7 +3365,13 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('فشل في تحميل المرفق: ${response['Message']}'),
+            content: Text(
+              Translations.getTextWithParams(
+                'error_downloading_attachment_with_error',
+                lang,
+                {'error': (response['Message'] ?? '').toString()},
+              ),
+            ),
             backgroundColor: Colors.red,
           ),
         );
@@ -2594,7 +3380,13 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       print('❌ خطأ في تحميل المرفق: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('خطأ في تحميل المرفق: $e'),
+          content: Text(
+            Translations.getTextWithParams(
+              'error_downloading_attachment_with_error',
+              lang,
+              {'error': e.toString()},
+            ),
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -2604,13 +3396,16 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
   // فتح المرفق
   Future<void> _openAttachment(
       Map<String, dynamic> attachment, int requestId) async {
+    final lang = Provider.of<LanguageService>(context, listen: false)
+        .currentLocale
+        .languageCode;
     try {
       final fileName = attachment['FileName'] as String? ??
           attachment['Name'] as String? ??
-          'ملف غير محدد';
+          Translations.getText('file_not_specified', lang);
       final fileType = attachment['FileType'] as String? ??
           attachment['Type'] as String? ??
-          'غير محدد';
+          Translations.getText('not_specified', lang);
       final attachmentId =
           attachment['ID'] as int? ?? attachment['AttachmentID'] as int? ?? 0;
 
@@ -2632,7 +3427,13 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
               const SizedBox(width: 16),
-              Text('جاري فتح: $fileName'),
+              Text(
+                Translations.getTextWithParams(
+                  'opening_file',
+                  lang,
+                  {'fileName': fileName},
+                ),
+              ),
             ],
           ),
           duration: const Duration(seconds: 2),
@@ -2656,16 +3457,18 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
             await launchUrl(uri, mode: LaunchMode.externalApplication);
           } else {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('لا يمكن فتح هذا النوع من الملفات'),
+              SnackBar(
+                content: Text(Translations.getText('cannot_open_file_type', lang)),
                 backgroundColor: Colors.orange,
               ),
             );
           }
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('رابط المرفق غير متاح'),
+            SnackBar(
+              content: Text(
+                Translations.getText('attachment_url_not_available', lang),
+              ),
               backgroundColor: Colors.red,
             ),
           );
@@ -2673,7 +3476,13 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('فشل في فتح المرفق: ${response['Message']}'),
+            content: Text(
+              Translations.getTextWithParams(
+                'error_opening_attachment_with_error',
+                lang,
+                {'error': (response['Message'] ?? '').toString()},
+              ),
+            ),
             backgroundColor: Colors.red,
           ),
         );
@@ -2682,10 +3491,60 @@ class _ApprovalsScreenState extends State<ApprovalsScreen> {
       print('❌ خطأ في فتح المرفق: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('خطأ في فتح المرفق: $e'),
+          content: Text(
+            Translations.getTextWithParams(
+              'error_opening_attachment_with_error',
+              lang,
+              {'error': e.toString()},
+            ),
+          ),
           backgroundColor: Colors.red,
         ),
       );
     }
   }
+}
+
+class _ApprovalGateInfo {
+  final bool canAct;
+  final int? myStepOrder;
+  final int? currentStepOrder;
+  final bool isSecondOrLater;
+  final bool firstStepApproved;
+  final String? blockedByNames;
+  final int totalSteps;
+  final int completedSteps;
+  final bool isUnknown;
+
+  const _ApprovalGateInfo({
+    required this.canAct,
+    required this.myStepOrder,
+    required this.currentStepOrder,
+    required this.isSecondOrLater,
+    required this.firstStepApproved,
+    required this.blockedByNames,
+    required this.totalSteps,
+    required this.completedSteps,
+  }) : isUnknown = false;
+
+  const _ApprovalGateInfo.unknown()
+      : canAct = true,
+        myStepOrder = null,
+        currentStepOrder = null,
+        isSecondOrLater = false,
+        firstStepApproved = false,
+        blockedByNames = null,
+        totalSteps = 0,
+        completedSteps = 0,
+        isUnknown = true;
+}
+
+class _PendingRequestsResult {
+  final List<request_models.EmployeeRequest> requests;
+  final Map<String, _ApprovalGateInfo> gateInfo;
+
+  const _PendingRequestsResult({
+    required this.requests,
+    required this.gateInfo,
+  });
 }

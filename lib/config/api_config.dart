@@ -3,9 +3,10 @@ import 'api_discovery.dart';
 
 class ApiConfig {
   // الرابط الأساسي للـ API - متغير
-  static String _baseUrl = 'http://192.168.1.162:5000';
+  static String _baseUrl = 'http://192.168.1.163:333/';
+  // static String _baseUrl = 'http://192.168.1.163:333/';
   // static String _baseUrl =
-  // 'http://www.perfect-solutions.net/HR/API:334'; // تم التغيير من localhost لدعم الهاتف الحقيقي
+  // 'http://192.168.1.163:333/'; // تم التغيير من localhost لدعم الهاتف الحقيقي
   // 'http://www.perfect-solutions.net:334/HR/API'; // تم التغيير من localhost لدعم الهاتف الحقيقي
   static bool _isInitialized = false;
 
@@ -185,7 +186,7 @@ class ApiConfig {
   static String getBiometricDeleteUrl(int clientId) =>
       _join(baseUrl, '/api/$clientId/biometric/delete');
 
-  // Face Biometric endpoints
+  // Face Biometric endpoints (الأصلي - للإرث فقط)
   static String getFaceEnrollUrl(int clientId) =>
       _join(baseUrl, '/api/$clientId/biometric/face/enroll');
   static String getFaceVerifyUrl(int clientId) =>
@@ -194,6 +195,21 @@ class ApiConfig {
       _join(baseUrl, '/api/$clientId/biometric/face/status/$empNo');
   static String getFaceResetUrl(int clientId, String empNo) =>
       _join(baseUrl, '/api/$clientId/biometric/face/reset/$empNo');
+  static String getFaceEmployeesUrl(int clientId) =>
+      _join(baseUrl, '/api/$clientId/biometric/face/employees');
+
+  // ========================================================================
+  // 🆕 الـ Endpoints الجديدة حسب متطلبات إعادة الهيكلة (المحدثة:
+  // ------------------------------------------------------------------------
+  // 1. Enrollment: حفظ صورة الوجه في جدول Users_Employees (بدون فحص حياة)
+  // 2. Verification: مطابقة وجه في الحضور/الانصراف مع الصورة المخزنة + فحص حياة
+  // ========================================================================
+  static String getSaveEmployeeFaceImageUrl(int clientId) =>
+      _join(baseUrl, '/api/$clientId/employee/face/save');
+  static String getVerifyFaceWithStoredImageUrl(int clientId) =>
+      _join(baseUrl, '/api/$clientId/employee/face/verify');
+  static String getEmployeeFaceImageStatusUrl(int clientId, String empNo) =>
+      _join(baseUrl, '/api/$clientId/employee/face/status/$empNo');
 
   // Headers
   static const Map<String, String> headers = {

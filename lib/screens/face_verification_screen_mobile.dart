@@ -1,10 +1,17 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:provider/provider.dart';
 import '../services/face_api_service.dart';
+import '../services/language_service.dart';
+import '../services/translations.dart';
+import '../services/liveness_detection_service.dart';
 
 class FaceVerificationScreen extends StatefulWidget {
   final String employeeNumber;
@@ -22,27 +29,546 @@ class FaceVerificationScreen extends StatefulWidget {
   State<FaceVerificationScreen> createState() => _FaceVerificationScreenState();
 }
 
-class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
+class _FaceVerificationScreenState extends State<FaceVerificationScreen>
+    with WidgetsBindingObserver {
+  static const bool _enableRemoteDebugTelemetry = true;
+  static const String _debugEnvPath =
+      'd:\\new\\.dbg\\attendance-post-verify-fail.env';
+  String? _debugServerUrl;
+  String? _debugSessionId;
+  // #region debug-point A:reporting-helper
+  Future<void> _reportDebugEvent(
+    String hypothesisId,
+    String location,
+    String msg, {
+    Map<String, dynamic>? data,
+  }) async {
+    if (!_enableRemoteDebugTelemetry) return;
+    try {
+      if (_debugServerUrl == null || _debugSessionId == null) {
+        try {
+          final envText = await File(_debugEnvPath).readAsString();
+          for (final line in envText.split('\n')) {
+            if (line.startsWith('DEBUG_SERVER_URL=')) {
+              _debugServerUrl = line.substring('DEBUG_SERVER_URL='.length).trim();
+            } else if (line.startsWith('DEBUG_SESSION_ID=')) {
+              _debugSessionId = line.substring('DEBUG_SESSION_ID='.length).trim();
+            }
+          }
+        } catch (_) {}
+      }
+      final url = _debugServerUrl ?? 'http://192.168.1.163:7777/event';
+      final session = _debugSessionId ?? 'attendance-post-verify-fail';
+      final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
+      final req = await client.postUrl(
+        Uri.parse(url),
+      );
+      req.headers.contentType = ContentType.json;
+      req.write(jsonEncode({
+        'sessionId': session,
+        'runId': 'pre-fix',
+        'hypothesisId': hypothesisId,
+        'location': location,
+        'msg': '[DEBUG] $msg',
+        'data': data ?? const {},
+        'ts': DateTime.now().millisecondsSinceEpoch,
+        'traceId': '${widget.employeeNumber}-${DateTime.now().microsecondsSinceEpoch}',
+      }));
+      await (await req.close()).drain<void>();
+      client.close(force: true);
+    } catch (_) {}
+  }
+  // #endregion
+
   CameraController? _controller;
   bool _isInitializing = true;
   bool _isProcessing = false;
-  String _statusMessage = 'يرجى توجيه وجهك نحو الكاميرا';
-  String _instructionMessage = 'وجه وجهك داخل الإطار';
+  bool _isVerifyingOnServer = false;
+  String _statusMessage = '';
+  String _instructionMessage = '';
+  String _challengeMessage = '';
   Color _borderColor = Colors.blue;
   bool _faceMatched = false;
+  bool _completedSuccessfully = false;
+  bool _closeHandled = false;
+  Map<String, dynamic>? _successfulVerificationPayload;
+  bool _verificationStartRequested = false;
+  bool _streamPausedForStillCapture = false;
+  Face? _currentDetectedFace;
+  int _currentFaceCount = 0;
+  PassiveLivenessSnapshot _analysisSnapshot =
+      const PassiveLivenessSnapshot.empty();
+  PassiveLivenessSnapshot? _lockedAnalysisSnapshot;
+
+  // ⚡ إصلاح 1: تتبع وقت بدء الجلسة لحساب المدة بشكل صحيح
+  final DateTime _sessionStartTime = DateTime.now();
+
+  // ⚡ إصلاح 2: نظام Pre-Capture JPG (نفس الحل في التسجيل):
+  Uint8List? _lastProactiveCapturedJpg;
+  Face? _lastProactiveCapturedFace;
+  Timer? _proactiveCaptureTimer;
+  bool _isProactiveCapturing = false;
+
+  final LivenessDetectionService _livenessService = LivenessDetectionService();
+  LivenessStatus _livenessStatus = LivenessStatus.initializing;
 
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
       enableClassification: true,
+      enableLandmarks: true,
+      enableContours: true,
       enableTracking: true,
       performanceMode: FaceDetectorMode.accurate,
     ),
   );
 
+  Face? _previousTrackedFace;
+  int _frameCounter = 0;
+  static const int _processEveryNthFrame = 3; // ⚡ من 2 إلى 3 → تقليل استهلاك المعالج 33%
+  bool _isStartingImageStream = false;
+
+  // ⚡ نفس حماية Race Condition للتسجيل (تطبيقها على التحقق للاتساق):
+  // تخزين آخر إطار وجه صالح كـ Fallback عند فشل takePicture بسبب تعليق الكاميرا.
+  Uint8List? _lastValidFrameBytes;
+  Size? _lastValidFrameSize;
+  InputImageRotation? _lastValidFrameRotation;
+  Face? _lastValidFace;
+  bool _verificationCaptureCompleted = false;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final lang =
+        Provider.of<LanguageService>(context, listen: false).currentLocale.languageCode;
+    _statusMessage = Translations.getText('face_point_to_camera', lang);
+    _instructionMessage = lang == 'ar'
+        ? 'لا توجد تحديات يدوية. فقط أبقِ وجهك داخل الإطار واترك النظام يحلل الحياة والهوية تلقائياً.'
+        : 'No manual challenges. Keep your face inside the frame and let the system analyze liveness automatically.';
+    _challengeMessage = lang == 'ar'
+        ? 'جاري فحص التموضع وحيوية الوجه...'
+        : 'Analyzing face position and passive liveness...';
+    _livenessService.initialize();
+    _setupLivenessListeners();
     _initializeCamera();
+    // ⚡ إصلاح 2: بدء مؤقت التقاط الاستباقي لصور JPG
+    _startProactiveCaptureLoop();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _proactiveCaptureTimer?.cancel();
+    _controller?.stopImageStream();
+    _controller?.dispose();
+    _faceDetector.close();
+    _livenessService.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    unawaited(_handleAppLifecycleState(state));
+  }
+
+  Future<void> _handleAppLifecycleState(AppLifecycleState state) async {
+    if (!mounted) return;
+
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      await _disposeCameraController(updateUi: mounted);
+      return;
+    }
+
+    if (state == AppLifecycleState.resumed &&
+        mounted &&
+        _controller == null &&
+        !_completedSuccessfully) {
+      await _initializeCamera();
+    }
+  }
+
+  CameraController _buildCameraController(
+    CameraDescription camera, {
+    required ResolutionPreset preset,
+    ImageFormatGroup? formatGroup,
+  }) {
+    return CameraController(
+      camera,
+      preset,
+      enableAudio: false,
+      imageFormatGroup: formatGroup,
+    );
+  }
+
+  Future<void> _configureCameraController(CameraController controller) async {
+    try {
+      await controller.setFlashMode(FlashMode.off);
+    } catch (_) {}
+    try {
+      await controller.setFocusMode(FocusMode.auto);
+    } catch (_) {}
+    try {
+      await controller.setExposureMode(ExposureMode.auto);
+    } catch (_) {}
+    try {
+      await controller.lockCaptureOrientation(DeviceOrientation.portraitUp);
+    } catch (_) {}
+  }
+
+  Future<void> _disposeCameraController({bool updateUi = false}) async {
+    final controller = _controller;
+    _controller = null;
+    if (controller != null) {
+      try {
+        if (controller.value.isStreamingImages) {
+          await controller.stopImageStream();
+        }
+      } catch (_) {}
+      try {
+        await controller.dispose();
+      } catch (_) {}
+    }
+    if (updateUi && mounted) {
+      setState(() {
+        _isInitializing = true;
+      });
+    }
+  }
+
+  PassiveLivenessSnapshot get _displaySnapshot =>
+      _lockedAnalysisSnapshot ?? _analysisSnapshot;
+
+  int get _displayCompletedRequiredSignals {
+    final snapshot = _displaySnapshot;
+    if (snapshot.requiredSignals <= 0) return 0;
+    return snapshot.completedSignals.clamp(0, snapshot.requiredSignals);
+  }
+
+  double get _displaySignalProgress {
+    final snapshot = _displaySnapshot;
+    if (snapshot.requiredSignals <= 0) return 0.0;
+    return (_displayCompletedRequiredSignals / snapshot.requiredSignals)
+        .clamp(0.0, 1.0);
+  }
+
+  String _buildSignalSummaryText() {
+    final snapshot = _displaySnapshot;
+    if (_lang() == 'ar') {
+      return 'المؤشرات المجتازة: ${snapshot.completedSignals}/${snapshot.totalSignals} | المطلوب للاعتماد: ${snapshot.requiredSignals}';
+    }
+    return 'Passed indicators: ${snapshot.completedSignals}/${snapshot.totalSignals} | Required: ${snapshot.requiredSignals}';
+  }
+
+  String _buildOverallSnapshotText() {
+    final snapshot = _displaySnapshot;
+    if (_lang() == 'ar') {
+      return 'التقييم العام للّقطة: ${((snapshot.overallScore) * 100).round()}%';
+    }
+    return 'Overall frame score: ${((snapshot.overallScore) * 100).round()}%';
+  }
+
+  String _getFacePresenceGuidance(int faceCount) {
+    if (_lang() == 'ar') {
+      if (faceCount <= 0) {
+        return 'لم يتم اكتشاف وجه، يرجى الوقوف أمام الكاميرا بشكل صحيح داخل الإطار.';
+      }
+      if (faceCount > 1) {
+        return 'تم اكتشاف أكثر من وجه في الإطار. يجب أن يظهر وجه موظف واحد فقط.';
+      }
+      return _analysisSnapshot.guidanceAr;
+    }
+
+    if (faceCount <= 0) {
+      return 'No face detected. Please stand clearly in front of the camera.';
+    }
+    if (faceCount > 1) {
+      return 'More than one face detected. Only one employee face is allowed in the frame.';
+    }
+    return _analysisSnapshot.guidanceEn;
+  }
+
+  // ⚡ إصلاح 2: نظام التقاط الاستباقي (نفس منطق التسجيل)
+  void _startProactiveCaptureLoop() {
+    _proactiveCaptureTimer = Timer.periodic(const Duration(milliseconds: 3000), (timer) async {
+      if (!mounted ||
+          _isInitializing ||
+          _isProcessing ||
+          _isVerifyingOnServer ||
+          _isProactiveCapturing ||
+          _verificationCaptureCompleted ||
+          _livenessStatus == LivenessStatus.spoofDetected) {
+        return;
+      }
+      if (_livenessStatus != LivenessStatus.waitingForFace &&
+          _livenessStatus != LivenessStatus.challengeInProgress) {
+        return;
+      }
+      try {
+        _isProactiveCapturing = true;
+        await _runProactiveCaptureOnce();
+      } catch (_) {
+      } finally {
+        if (mounted) _isProactiveCapturing = false;
+      }
+    });
+  }
+
+  Future<void> _runProactiveCaptureOnce() async {
+    if (_controller == null || !_controller!.value.isInitialized) return;
+    final XFile? img = await _tryTakePictureOrNull(timeoutMs: 2200);
+    if (img == null) return;
+    final bytes = await File(img.path).readAsBytes().timeout(const Duration(milliseconds: 1500));
+    final inputImage = InputImage.fromFilePath(img.path);
+    final faces = await _faceDetector.processImage(inputImage).timeout(const Duration(milliseconds: 2000));
+    if (faces.length == 1) {
+      if (kDebugMode) {
+        print('📸 [Verify-Proactive] ✅ تم التقاط صورة JPG احتياطية بحجم ${bytes.length ~/ 1024}KB | وجه موجود');
+      }
+      _lastProactiveCapturedJpg = bytes;
+      _lastProactiveCapturedFace = faces.first;
+    } else {
+      _lastProactiveCapturedJpg = null;
+      _lastProactiveCapturedFace = null;
+    }
+  }
+
+  Future<XFile?> _tryTakePictureOrNull({required int timeoutMs}) async {
+    try {
+      if (_controller == null || !_controller!.value.isInitialized) return null;
+      if (_controller!.value.isStreamingImages) {
+        await _controller!.stopImageStream();
+        _streamPausedForStillCapture = true;
+      }
+      return await _controller!.takePicture().timeout(Duration(milliseconds: timeoutMs));
+    } catch (_) {
+      return null;
+    } finally {
+      await _resumeImageStreamIfNeeded();
+    }
+  }
+
+  Future<void> _resumeImageStreamIfNeeded() async {
+    if (_controller == null || !_controller!.value.isInitialized) return;
+    if (_verificationCaptureCompleted || _isVerifyingOnServer) return;
+    if (_streamPausedForStillCapture && !_controller!.value.isStreamingImages) {
+      try {
+        await _startFrameStreaming();
+      } catch (_) {
+      } finally {
+        _streamPausedForStillCapture = false;
+      }
+    }
+  }
+
+  String _lang() =>
+      Provider.of<LanguageService>(context, listen: false).currentLocale.languageCode;
+
+  String _t(String key) => Translations.getText(key, _lang());
+
+  String _tParams(String key, Map<String, String> params) =>
+      Translations.getTextWithParams(key, _lang(), params);
+
+  bool _isVerifiedMatchResult(dynamic result) {
+    if (result is! Map) return false;
+
+    final bool explicitMatch =
+        result['IsMatch'] == true || result['Matched'] == true;
+    if (explicitMatch) return true;
+
+    final bool successFlag = result['Success'] == true ||
+        result['success'] == true ||
+        result['SUCCESS'] == true;
+    final status = (result['Status'] ?? result['status'] ?? '')
+        .toString()
+        .toLowerCase();
+    final message = (result['Message'] ?? result['message'] ?? '')
+        .toString()
+        .toLowerCase();
+    final confidence = (result['ConfidenceScore'] as num?)?.toDouble() ?? 0.0;
+
+    // توافق احتياطي مع الردود القديمة: لا نعتبر النجاح صحيحاً إلا إذا
+    // كان الرد ناجحاً ورسالة الخادم تؤكد التحقق ودرجة التشابه ضمن الحد المقبول.
+    return successFlag &&
+        (status == 'success' || status == 'ok' || status.isEmpty) &&
+        confidence >= 0.65 &&
+        (message.contains('تم التحقق من الوجه بنجاح') ||
+            message.contains('verification success'));
+  }
+
+  void _smartClose({String reason = 'auto', bool forceSuccess = false}) {
+    if (_closeHandled) return;
+    _closeHandled = true;
+    final bool result = forceSuccess || _completedSuccessfully || _faceMatched;
+    final payload = <String, dynamic>{
+      'Success': result,
+      'Matched': _faceMatched,
+      'Completed': _completedSuccessfully,
+      'EmployeeNumber': widget.employeeNumber,
+      'Reason': reason,
+    };
+    if (_successfulVerificationPayload != null) {
+      payload.addAll(_successfulVerificationPayload!);
+    }
+    if (kDebugMode) {
+      print('🚪 [Verification-SmartClose] محاولة إغلاق شاشة التحقق | result=$result | completed=$_completedSuccessfully | matched=$_faceMatched | reason=$reason | canPop=${Navigator.of(context).canPop()}');
+    }
+    try {
+      final localNavigator = Navigator.of(context);
+      final rootNavigator = Navigator.of(context, rootNavigator: true);
+      if (localNavigator.canPop()) {
+        localNavigator.pop(payload);
+      } else if (rootNavigator.canPop()) {
+        rootNavigator.pop(payload);
+      } else {
+        if (kDebugMode) {
+          print('🚪 [Verification-SmartClose] لا يوجد Navigator يمكنه pop. سنعتمد على Global Flag فقط.');
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) print('🚪 [Verification-SmartClose] ❌ استثناء أثناء الإغلاق: $e. الاعتماد على Global Flag Failsafe.');
+    }
+  }
+
+  void _setupLivenessListeners() {
+    _livenessService.statusStream.listen((status) {
+      if (!mounted) return;
+      setState(() {
+        _livenessStatus = status;
+      });
+      _handleLivenessStatusChange(status);
+    });
+  }
+
+  void _handleLivenessStatusChange(LivenessStatus status) {
+    if (!mounted) return;
+
+    // #region debug-point A:liveness-status
+    unawaited(_reportDebugEvent(
+      'A',
+      'face_verification_screen_mobile.dart:_handleLivenessStatusChange',
+      'Liveness status changed',
+      data: {
+        'status': status.name,
+        'isProcessing': _isProcessing,
+        'isVerifyingOnServer': _isVerifyingOnServer,
+        'controllerExists': _controller != null,
+        'controllerInitialized': _controller?.value.isInitialized ?? false,
+        'verificationCaptureCompleted': _verificationCaptureCompleted,
+      },
+    ));
+    // #endregion
+
+    switch (status) {
+      case LivenessStatus.initializing:
+        _borderColor = Colors.blue;
+        _statusMessage = _t('liveness_initializing');
+        break;
+      case LivenessStatus.waitingForFace:
+        _borderColor = Colors.blue;
+        _statusMessage = _t('liveness_waiting_face');
+        _challengeMessage = _getFacePresenceGuidance(_currentFaceCount);
+        break;
+      case LivenessStatus.challengeInProgress:
+        _borderColor = Colors.lightBlueAccent;
+        _statusMessage = _lang() == 'ar'
+            ? 'جاري فحص الحياة السلبي وتتبع الوجه'
+            : 'Passive liveness scan in progress';
+        _challengeMessage = _getFacePresenceGuidance(_currentFaceCount);
+        break;
+      case LivenessStatus.analyzing:
+        _borderColor = Colors.purple;
+        _challengeMessage = _lang() == 'ar'
+            ? 'جاري إنهاء تحليل الهوية ومقاومة الانتحال...'
+            : 'Finalizing liveness and anti-spoof analysis...';
+        _statusMessage = _t('liveness_analyzing');
+        _isProcessing = true;
+        break;
+      case LivenessStatus.passed:
+        _borderColor = Colors.green;
+        _lockedAnalysisSnapshot = _livenessService.currentSnapshot;
+        _challengeMessage = _lang() == 'ar'
+            ? 'تم اجتياز جميع مؤشرات الفحص الحيوي المطلوبة، جاري إرسال التحقق للخادم.'
+            : 'All required biometric indicators passed, sending verification request.';
+        _statusMessage = _t('liveness_passed');
+        // ⚡ تم إزالة _isProcessing=true هنا (تعارض قاتل مع Retry Mechanism!)
+        if (kDebugMode) {
+          print('✅ [VERIFY-LIVENESS-PASSED] ════════════════════════');
+          print('✅ [VERIFY-LIVENESS-PASSED] Status=passed | _isProcessing=$_isProcessing | _isVerifyingOnServer=$_isVerifyingOnServer');
+          print('✅ [VERIFY-LIVENESS-PASSED] _controller=${_controller != null ? "EXISTS" : "NULL"} | initialized=${_controller?.value.isInitialized ?? false} | mounted=$mounted');
+          print('✅ [VERIFY-LIVENESS-PASSED] بدء سلسلة Retry للاستدعاء (3 محاولات كل 300ms)...');
+          print('✅ [VERIFY-LIVENESS-PASSED] ════════════════════════');
+        }
+        if (_verificationStartRequested ||
+            _isVerifyingOnServer ||
+            _verificationCaptureCompleted) {
+          unawaited(_reportDebugEvent(
+            'A',
+            'face_verification_screen_mobile.dart:LivenessStatus.passed',
+            'Ignored duplicate passed event',
+            data: {
+              'verificationStartRequested': _verificationStartRequested,
+              'isVerifyingOnServer': _isVerifyingOnServer,
+              'verificationCaptureCompleted': _verificationCaptureCompleted,
+            },
+          ));
+          break;
+        }
+        _verificationStartRequested = true;
+        // #region debug-point A:passed-trigger
+        unawaited(_reportDebugEvent(
+          'A',
+          'face_verification_screen_mobile.dart:LivenessStatus.passed',
+          'Scheduling verification start retry',
+          data: {
+            'isProcessing': _isProcessing,
+            'isVerifyingOnServer': _isVerifyingOnServer,
+            'controllerInitialized': _controller?.value.isInitialized ?? false,
+            'completedChallenges': _livenessService.completedChallengeCount,
+          },
+        ));
+        // #endregion
+        unawaited(_tryStartVerificationWithRetry(maxAttempts: 3, delayMs: 300));
+        break;
+      case LivenessStatus.spoofDetected:
+        _borderColor = Colors.red;
+        _challengeMessage = '';
+        _statusMessage = _t('liveness_failed_spoof');
+        _isProcessing = false;
+        _logSecurityEvent('SPOOF_DETECTED');
+        Future.delayed(const Duration(seconds: 5), () {
+          if (mounted) _resetAndStartOver();
+        });
+        break;
+      case LivenessStatus.timeout:
+        _borderColor = Colors.orange;
+        _challengeMessage = '';
+        _statusMessage = _t('liveness_failed_timeout');
+        _isProcessing = false;
+        Future.delayed(const Duration(seconds: 2), () { // ⚡ 2s بدلاً من 3s
+          if (mounted) _resetAndStartOver();
+        });
+        break;
+      case LivenessStatus.failed:
+        _borderColor = Colors.red;
+        _challengeMessage = '';
+        _statusMessage = _t('liveness_failed_generic');
+        _isProcessing = false;
+        Future.delayed(const Duration(seconds: 2), () { // ⚡ 2s بدلاً من 3s
+          if (mounted) _resetAndStartOver();
+        });
+        break;
+    }
+    // ⚡ إزالة setState(() {}) المكرر هنا → كان يسبب إعادة بناء مرتين لكل حدث
+  }
+
+  void _logSecurityEvent(String eventType) {
+    if (kDebugMode) {
+      print('🔴 SECURITY EVENT [$eventType]: Employee: ${widget.employeeNumber}, '
+          'Client: ${widget.clientId}, Time: ${DateTime.now().toIso8601String()}');
+    }
   }
 
   Future<void> _initializeCamera() async {
@@ -52,127 +578,651 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
       orElse: () => cameras.first,
     );
 
-    _controller = CameraController(
-      frontCamera,
-      ResolutionPreset.high,
-      enableAudio: false,
-    );
-
     try {
-      await _controller!.initialize();
+      await _disposeCameraController();
+
+      final attempts = <({ResolutionPreset preset, ImageFormatGroup? format})>[
+        (
+          preset: Platform.isIOS ? ResolutionPreset.high : ResolutionPreset.medium,
+          format: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
+        ),
+        (
+          preset: ResolutionPreset.medium,
+          format: null,
+        ),
+        (
+          preset: ResolutionPreset.low,
+          format: null,
+        ),
+      ];
+
+      Object? lastError;
+      for (final attempt in attempts) {
+        CameraController? trialController;
+        try {
+          trialController = _buildCameraController(
+            frontCamera,
+            preset: attempt.preset,
+            formatGroup: attempt.format,
+          );
+          await trialController.initialize();
+          await _configureCameraController(trialController);
+          _controller = trialController;
+          trialController = null;
+          break;
+        } catch (e) {
+          lastError = e;
+          try {
+            await trialController?.dispose();
+          } catch (_) {}
+        }
+      }
+
+      if (_controller == null) {
+        throw lastError ?? Exception('تعذر تهيئة الكاميرا على هذا الجهاز.');
+      }
+
       if (mounted) {
         setState(() {
           _isInitializing = false;
         });
-        _startLivenessProcess();
+        await _startFrameStreaming();
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _statusMessage = 'خطأ في تشغيل الكاميرا: $e';
+          _isInitializing = false;
+          _statusMessage = _tParams(
+            'camera_start_error_with_error',
+            {'error': e.toString()},
+          );
         });
       }
     }
   }
 
-  void _startLivenessProcess() {
-    setState(() {
-      _statusMessage = 'نظام التحقق من الهوية';
-      _instructionMessage = 'يرجى الرمش بعينيك الآن للتأكد';
-      _borderColor = Colors.blue;
-    });
-
-    Future.delayed(const Duration(seconds: 2), _autoCaptureAndVerify);
+  Future<void> _startFrameStreaming() async {
+    if (_controller == null ||
+        !_controller!.value.isInitialized ||
+        _controller!.value.isStreamingImages ||
+        _isStartingImageStream) {
+      return;
+    }
+    _isStartingImageStream = true;
+    try {
+      await _controller!.startImageStream(_processCameraImage);
+    } finally {
+      _isStartingImageStream = false;
+    }
   }
 
-  Future<void> _autoCaptureAndVerify() async {
+  Future<void> _processCameraImage(CameraImage image) async {
+    // ⚡ نفس الحماية Race Condition للتسجيل (تجنب تعليق الكاميرا):
+    // لا نوقف المعالجة عند Status.passed، بل عند اكتمال التقاط الصورة فور نجاح الـ API.
     if (!mounted ||
-        _isProcessing ||
-        _controller == null ||
-        !_controller!.value.isInitialized ||
-        _faceMatched) return;
+        _verificationCaptureCompleted ||
+        _livenessStatus == LivenessStatus.spoofDetected) {
+      return;
+    }
 
-    setState(() {
-      _isProcessing = true;
-      _statusMessage = 'جاري التحقق من ملامح الوجه...';
-      _borderColor = Colors.orange;
-    });
+    _frameCounter++;
+    if (_frameCounter % _processEveryNthFrame != 0) return;
 
     try {
-      final XFile rawImage = await _controller!.takePicture();
-
-      final inputImage = InputImage.fromFilePath(rawImage.path);
-      final faces = await _faceDetector.processImage(inputImage);
-
-      if (kDebugMode) {
-        print('🔍 Detected faces: ${faces.length}');
+      final BytesBuilder bytesBuilder = BytesBuilder(copy: false);
+      for (final Plane plane in image.planes) {
+        bytesBuilder.add(plane.bytes);
       }
+      final Uint8List bytes = bytesBuilder.takeBytes();
 
-      if (faces.isEmpty) {
-        _handleFailure('لم يتم اكتشاف وجه. حاول التقريب.');
-        return;
-      }
+      final Size imageSize = Size(image.width.toDouble(), image.height.toDouble());
 
-      Face face = faces.first;
-      if (faces.length > 1) {
-        faces.sort((a, b) => (b.boundingBox.width * b.boundingBox.height)
-            .compareTo(a.boundingBox.width * a.boundingBox.height));
-        face = faces.first;
-        if (kDebugMode) {
-          print('⚠️ Found multiple faces, picking the largest one.');
-        }
-      }
+      final camera = _controller!.description;
+      final imageRotation = InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
+          InputImageRotation.rotation0deg;
 
-      double headY = face.headEulerAngleY ?? 0;
-      double headX = face.headEulerAngleX ?? 0;
-      bool facingCamera = headY.abs() < 20 && headX.abs() < 20;
+      final inputImageFormat = InputImageFormatValue.fromRawValue(image.format.raw) ??
+          (Platform.isAndroid ? InputImageFormat.nv21 : InputImageFormat.bgra8888);
 
-      if (!facingCamera) {
-        _handleFailure('يرجى النظر مباشرة للكاميرا دون ميلان.');
-        return;
-      }
+      final int bytesPerRow = image.planes.isNotEmpty ? image.planes.first.bytesPerRow : 0;
 
-      if (face.leftEyeOpenProbability != null &&
-          face.leftEyeOpenProbability! < 0.2) {
-        _handleFailure('يرجى فتح عينيك بوضوح.');
-        return;
-      }
-
-      final File imageFile = File(rawImage.path);
-      final bytes = await imageFile.readAsBytes();
-      final base64Image = base64Encode(bytes);
-
-      if (kDebugMode) {
-        print('📡 Sending image to server (Size: ${bytes.length ~/ 1024} KB)');
-      }
-
-      final result = await FaceApiService.verifyFace(
-        clientId: widget.clientId,
-        employeeNumber: widget.employeeNumber,
-        imageBase64: base64Image,
+      final inputImageMetadata = InputImageMetadata(
+        size: imageSize,
+        rotation: imageRotation,
+        format: inputImageFormat,
+        bytesPerRow: bytesPerRow,
       );
 
-      if (!mounted) return;
+      final inputImage = InputImage.fromBytes(bytes: bytes, metadata: inputImageMetadata);
+      final faces = await _faceDetector.processImage(inputImage);
 
-      if (result['Success'] == true) {
+      Face? currentFace;
+      final faceCount = faces.length;
+      if (faceCount == 1) {
+        currentFace = faces.first;
+        // ⚡ تخزين آخر إطار صالح كـ Fallback (مثل التسجيل)
+        _lastValidFrameBytes = bytes;
+        _lastValidFrameSize = imageSize;
+        _lastValidFrameRotation = imageRotation;
+        _lastValidFace = currentFace;
+      } else {
+        _lastValidFrameBytes = null;
+        _lastValidFrameSize = null;
+        _lastValidFrameRotation = null;
+        _lastValidFace = null;
+      }
+
+      final motion = LivenessDetectionService.computeFrameMotion(
+        currentFace: currentFace,
+        previousFace: _previousTrackedFace,
+      );
+
+      final List<int> samplePixels = [];
+      if (image.planes.isNotEmpty && image.planes.first.bytes.isNotEmpty) {
+        final step = (image.planes.first.bytes.length ~/ 500).clamp(1, 100);
+        for (int i = 0; i < image.planes.first.bytes.length; i += step) {
+          if (samplePixels.length >= 500) break;
+          samplePixels.add(image.planes.first.bytes[i]);
+        }
+      }
+      final noiseVar = LivenessDetectionService.computeNoiseVariance(samplePixels);
+
+      _livenessService.processFrame(
+        face: currentFace,
+        overallMotion: motion,
+        noiseVariance: noiseVar,
+        imageWidth: imageSize.width,
+        imageHeight: imageSize.height,
+      );
+
+      if (mounted) {
         setState(() {
-          _faceMatched = true;
-          _borderColor = Colors.green;
-          _statusMessage = '✅ تم التحقق بنجاح';
-          _instructionMessage = 'هوية حقيقية ومطابقة';
-          _isProcessing = false;
+          _currentFaceCount = faceCount;
+          _currentDetectedFace = currentFace;
+          if (_lockedAnalysisSnapshot == null &&
+              !_verificationStartRequested &&
+              !_isVerifyingOnServer) {
+            _analysisSnapshot = _livenessService.currentSnapshot;
+            _challengeMessage = _getFacePresenceGuidance(faceCount);
+          }
         });
-        await Future.delayed(const Duration(milliseconds: 1500));
+      }
+
+      _previousTrackedFace = currentFace;
+    } catch (e) {
+      // Suppress frame processing errors to avoid spam
+    }
+  }
+
+  Future<void> _captureAndVerifyWithLiveness() async {
+    if (!mounted ||
+        _isVerifyingOnServer ||
+        _controller == null ||
+        !_controller!.value.isInitialized) {
+      return;
+    }
+
+    // 🔍 Diagnostics Performance لتتبع زمن كل مرحلة
+    final perfTrace = DateTime.now();
+    String phase = 'START';
+    int verifyAttempt = 0;
+    if (kDebugMode) {
+      print('⚡ [VERIFY-PERF] ════════════════════════════════════════');
+      print('⚡ [VERIFY-PERF] بدء عملية التحقق | Trace: T${perfTrace.millisecondsSinceEpoch.toRadixString(36)} | Emp=${widget.employeeNumber}');
+      print('⚡ [VERIFY-PERF] ════════════════════════════════════════');
+    }
+
+    setState(() {
+      _isVerifyingOnServer = true;
+      _isProcessing = true;
+      _statusMessage = _t('verifying_face_features');
+    });
+    // #region debug-point B:capture-enter
+    unawaited(_reportDebugEvent(
+      'B',
+      'face_verification_screen_mobile.dart:_captureAndVerifyWithLiveness',
+      'Entered capture and verify',
+      data: {
+        'controllerInitialized': _controller?.value.isInitialized ?? false,
+        'isStreamingImages': _controller?.value.isStreamingImages ?? false,
+        'livenessStatus': _livenessStatus.name,
+      },
+    ));
+    // #endregion
+
+    Uint8List? finalImageBytes;
+    Face? finalFace;
+    String? failReason;
+
+    try {
+      if (_currentFaceCount <= 0) {
+        _handleFailure(
+          _lang() == 'ar'
+              ? 'لم يتم اكتشاف وجه، يرجى الوقوف أمام الكاميرا بشكل صحيح داخل الإطار.'
+              : 'No face detected. Please stand correctly in front of the camera.',
+        );
+        return;
+      }
+      if (_currentFaceCount > 1) {
+        _handleFailure(
+          _lang() == 'ar'
+              ? 'تم اكتشاف أكثر من وجه في الإطار. يجب أن يظهر وجه موظف واحد فقط قبل التحقق.'
+              : 'More than one face detected. Only one face is allowed before verification.',
+        );
+        return;
+      }
+
+      // 🔍 المرحلة 1: فحص نتيجة Liveness
+      phase = 'CHECK_LIVENESS';
+      final livenessResult = _livenessService.getFinalResult();
+      if (!livenessResult.passed) {
+        if (kDebugMode) print('⚡ [VERIFY-PERF] ❌ نتيجة Liveness غير صالحة رغم الحالة passed (تناقض داخلي)');
+        _handleLivenessResultFailure(livenessResult);
+        return;
+      }
+      final t1 = DateTime.now().difference(perfTrace).inMilliseconds;
+      if (kDebugMode) print('⚡ [VERIFY-PERF] (${t1}ms) PHASE 1 OK: Liveness ناجحة | score=${livenessResult.livenessScore.toStringAsFixed(2)} | passed=${livenessResult.passedChecks.length}');
+
+      // 🔍 المرحلة 2: التقاط الصورة أو Fallback (3 طبقات: takePicture → Pre-capture JPG → آخر RAW)
+      phase = 'CAPTURE_IMAGE';
+      String fallbackUsed = 'NONE';
+      try {
+        final swCap = Stopwatch()..start();
+        if (_controller!.value.isStreamingImages) {
+          await _controller!.stopImageStream();
+          _streamPausedForStillCapture = true;
+        }
+        // #region debug-point B:take-picture-before
+        unawaited(_reportDebugEvent(
+          'B',
+          'face_verification_screen_mobile.dart:takePicture-before',
+          'Calling takePicture',
+          data: {
+            'isStreamingImages': _controller?.value.isStreamingImages ?? false,
+            'fallbackJpgExists': _lastProactiveCapturedJpg != null,
+            'fallbackRawExists': _lastValidFrameBytes != null,
+          },
+        ));
+        // #endregion
+        final XFile rawImage = await _controller!.takePicture().timeout(
+          const Duration(seconds: 8),
+          onTimeout: () {
+            failReason = 'TIMEOUT_TAKEPICTURE_8S';
+            throw TimeoutException('مهلة التقاط الصورة انتهت (8 ثوانٍ) — سنستخدم آخر صورة JPG محفوظة.');
+          },
+        );
+        final t2a = swCap.elapsedMilliseconds;
+        final bytesXFile = await File(rawImage.path).readAsBytes().timeout(const Duration(seconds: 4));
+        final t2b = swCap.elapsedMilliseconds;
+        final inputImage = InputImage.fromFilePath(rawImage.path);
+        final faces = await _faceDetector.processImage(inputImage).timeout(const Duration(seconds: 6));
+        final t2c = swCap.elapsedMilliseconds;
+
+        if (faces.length == 1) {
+          finalImageBytes = bytesXFile;
+          finalFace = faces.first;
+          fallbackUsed = 'DIRECT';
+          if (kDebugMode) print('⚡ [VERIFY-PERF] (${t2c}ms) PHASE 2A OK: takePicture() مباشر + وجه موجود ✅');
+          // #region debug-point B:take-picture-success
+          unawaited(_reportDebugEvent(
+            'B',
+            'face_verification_screen_mobile.dart:takePicture-success',
+            'Direct takePicture succeeded',
+            data: {
+              'elapsedMs': t2c,
+              'imageKb': finalImageBytes!.length ~/ 1024,
+              'faceCount': faces.length,
+            },
+          ));
+          // #endregion
+        } else if (faces.length > 1) {
+          failReason = 'MULTI_FACE_IN_CAPTURED';
+          throw StateError(_lang() == 'ar'
+              ? 'تم اكتشاف أكثر من وجه في الصورة. يرجى أن يظهر وجه موظف واحد فقط.'
+              : 'More than one face detected in the captured image.');
+        } else {
+          failReason = 'NO_FACE_IN_CAPTURED';
+          throw StateError(_lang() == 'ar'
+              ? 'لم يتم اكتشاف وجه في الصورة الملتقطة. يرجى الوقوف أمام الكاميرا بشكل صحيح.'
+              : 'No face detected in the captured image.');
+        }
+      } on StateError {
+        rethrow;
+      } catch (capErr) {
+        if (kDebugMode) print('⚡ [VERIFY-PERF] ⚠️ المرحلة 2A فشلت ($failReason): $capErr → البحث عن Fallback...');
+        // #region debug-point B:take-picture-failed
+        unawaited(_reportDebugEvent(
+          'B',
+          'face_verification_screen_mobile.dart:takePicture-failed',
+          'Direct capture failed, moving to fallback',
+          data: {
+            'failReason': failReason,
+            'error': capErr.toString().split('\n').first,
+            'fallbackJpgExists': _lastProactiveCapturedJpg != null,
+            'fallbackRawExists': _lastValidFrameBytes != null,
+          },
+        ));
+        // #endregion
+        // ⚡ Fallback 1: صورة JPG استباقية (الأفضل أماناً)
+        if (_lastProactiveCapturedJpg != null && _lastProactiveCapturedFace != null) {
+          final t2fb1 = DateTime.now().difference(perfTrace).inMilliseconds;
+          finalImageBytes = _lastProactiveCapturedJpg!;
+          finalFace = _lastProactiveCapturedFace!;
+          fallbackUsed = 'PROACTIVE_JPG';
+          if (kDebugMode) print('⚡ [VERIFY-PERF] (${t2fb1}ms) PHASE 2B OK: Fallback 1 → صورة JPG استباقية (حجم=${finalImageBytes!.length ~/ 1024}KB) ✅');
+        }
+        // ⚡ Fallback 2: آخر إطار RAW كخطة أخيرة
+        else if (_lastValidFrameBytes != null && _lastValidFace != null) {
+          final t2fb2 = DateTime.now().difference(perfTrace).inMilliseconds;
+          finalImageBytes = _lastValidFrameBytes!;
+          finalFace = _lastValidFace!;
+          fallbackUsed = 'RAW_FRAME_LAST_RESORT';
+          if (kDebugMode) print('⚡ [VERIFY-PERF] (${t2fb2}ms) PHASE 2C ⚠️ Fallback 2 → إطار RAW (خطة أخيرة) ⚠️');
+        } else {
+          rethrow;
+        }
+      }
+      if (finalImageBytes == null || finalFace == null) throw Exception('فشل الحصول على صورة وجه صالحة.');
+
+      // 🔍 المرحلة 3: فحص زوايا الرأس والعيون
+      phase = 'VALIDATE_POSE';
+      double headY = finalFace!.headEulerAngleY ?? 0;
+      double headX = finalFace!.headEulerAngleX ?? 0;
+      if (headY.abs() > 30 || headX.abs() > 30) {
+        throw StateError(_t('look_straight_no_tilt'));
+      }
+      if (finalFace!.leftEyeOpenProbability != null && finalFace!.leftEyeOpenProbability! < 0.12) {
+        throw StateError(_t('open_eyes_clearly'));
+      }
+      final t3 = DateTime.now().difference(perfTrace).inMilliseconds;
+      if (kDebugMode) print('⚡ [VERIFY-PERF] (${t3}ms) PHASE 3 OK: زوايا الرأس والعيون صالحة | headY=${headY.toStringAsFixed(1)}° headX=${headX.toStringAsFixed(1)}°');
+
+      // 🔍 المرحلة 4: Base64 + Metadata (إصلاح sessionDuration + معلومات Fallback)
+      phase = 'BASE64_ENCODE';
+      final base64Image = base64Encode(finalImageBytes!);
+      final snapshotForVerification = _displaySnapshot;
+      final livenessMetadata = {
+        'livenessScore': livenessResult.livenessScore,
+        'spoofRisk': livenessResult.spoofRisk,
+        'passedChecks': livenessResult.passedChecks,
+        'challengesCompleted': _livenessService.completedChallengeCount,
+        'passiveAnalysis': {
+          'trackingScore': snapshotForVerification.trackingScore,
+          'poseScore': snapshotForVerification.poseScore,
+          'eyeActivityScore': snapshotForVerification.eyeActivityScore,
+          'breathingScore': snapshotForVerification.breathingScore,
+          'textureScore': snapshotForVerification.textureScore,
+          'landmarkScore': snapshotForVerification.landmarkScore,
+          'antiSpoofScore': snapshotForVerification.antiSpoofScore,
+          'overallScore': snapshotForVerification.overallScore,
+          'completedSignals': snapshotForVerification.completedSignals,
+          'requiredSignals': snapshotForVerification.requiredSignals,
+        },
+        // ⚡ إصلاح حساب مدة الجلسة: من وقت بدء الجلسة الفعلي
+        'sessionDurationSec': DateTime.now().difference(_sessionStartTime).inSeconds,
+        'verificationTimestamp': DateTime.now().toIso8601String(),
+        // ⚡ معلومات مصدر الصورة للتشخيص
+        'imageSource': fallbackUsed,
+        'capturedFallbackUsed': fallbackUsed != 'DIRECT',
+      };
+      final t4 = DateTime.now().difference(perfTrace).inMilliseconds;
+      if (kDebugMode) {
+        print('⚡ [VERIFY-PERF] (${t4}ms) PHASE 4 OK: Base64 + Metadata | حجم الصورة=${finalImageBytes!.length ~/ 1024}KB');
+      }
+
+      // 🔍 المرحلة 5: Retry ذكي لإرسال التحقق (3 محاولات بدون إعادة Liveness!)
+      phase = 'VERIFY_API_SEND';
+      const maxAttempts = 3;
+      Map<String, dynamic>? finalResult;
+      String? lastApiErr;
+
+      for (verifyAttempt = 1; verifyAttempt <= maxAttempts; verifyAttempt++) {
+        try {
+          if (kDebugMode) print('⚡ [VERIFY-PERF] 🔄 محاولة التحقق $verifyAttempt/$maxAttempts (NEW FLOW: مطابقة مع الصورة المخزنة في Users_Employees)...');
+          final swApi = Stopwatch()..start();
+          // 🆕 استخدام الـ API الجديد: verifyFaceWithStoredImage → يقوم بالآتي على السيرفر:
+          //    1. سحب صورة الوجه المحفوظة من جدول Users_Employees
+          //    2. مطابقة الوجه الملتقط حالياً (مع نتيجة Liveness) مع الصورة المحفوظة
+          //    3. إرجاع Match/NoMatch + درجة التشابه
+          final r = await FaceApiService.verifyFaceWithStoredImage(
+            clientId: widget.clientId,
+            employeeNumber: widget.employeeNumber,
+            imageBase64: base64Image,
+            deviceInfo: jsonEncode(livenessMetadata),
+            livenessScore: livenessResult.livenessScore,
+            challengesCompleted: _livenessService.completedChallengeCount,
+            spoofRisk: livenessResult.spoofRisk,
+          ).timeout(const Duration(seconds: 15));
+          final t5sub = swApi.elapsedMilliseconds;
+          finalResult = r;
+          // #region debug-point E:verify-api-result
+          unawaited(_reportDebugEvent(
+            'E',
+            'face_verification_screen_mobile.dart:verify-api-result',
+            'Verify API returned response',
+            data: {
+              'attempt': verifyAttempt,
+              'elapsedMs': t5sub,
+              'success': _isVerifiedMatchResult(r),
+              'message': r['Message']?.toString(),
+              'statusCode': r['StatusCode'] ?? r['statusCode'],
+              'isMatch': r['IsMatch'] ?? r['Matched'],
+              'confidenceScore': r['ConfidenceScore'],
+            },
+          ));
+          // #endregion
+          if (_isVerifiedMatchResult(r)) {
+            if (kDebugMode) print('⚡ [VERIFY-PERF] (${t5sub}ms) PHASE 5 OK: نجح التحقق في المحاولة $verifyAttempt');
+            lastApiErr = null;
+            break;
+          } else {
+            lastApiErr = r['Message'] ?? 'فشل التحقق غير معروف';
+            if (kDebugMode) print('⚡ [VERIFY-PERF] ⚠️ رفض السيرفر محاولة $verifyAttempt: $lastApiErr');
+            // ⚡ إصلاح منطق التوقف: توسيع القائمة (نفس منطق التسجيل)
+            final errLower = lastApiErr!.toLowerCase();
+            final logicalStopKeywords = [
+              'غير موجود', 'غير مفعل', 'الموظف',
+              'بصمة', 'مسجلة', 'face template',
+              'غير واضح', 'quality', 'جودة',
+              'لا يوجد وجه', 'no face', 'detect',
+              'لا تتطابق', 'mismatch', 'not match',
+              'غير مصرح', 'unauthorized', 'permission',
+              'القاعدة', 'database', 'duplicate',
+              'invalid', 'خطأ في', 'الرجاء',
+              'محظور', 'blocked', 'suspended',
+            ];
+            bool shouldStop = logicalStopKeywords.any((k) =>
+                lastApiErr!.contains(k) || errLower.contains(k.toLowerCase()));
+            if (shouldStop) {
+              if (kDebugMode) print('⚡ [VERIFY-PERF] 🛑 توقف Retry (خطأ منطقي): $lastApiErr');
+              break;
+            }
+          }
+        } catch (apiErr) {
+          lastApiErr = apiErr.toString();
+          if (kDebugMode) print('⚡ [VERIFY-PERF] ❌ استثناء محاولة $verifyAttempt: $lastApiErr');
+        }
+        if (verifyAttempt < maxAttempts) {
+          await Future.delayed(Duration(milliseconds: 600 * verifyAttempt));
+        }
+      }
+
+      // 🔍 المرحلة 6: الفحص النهائي + إغلاق الشاشة
+      phase = 'FINALIZE';
+      _verificationCaptureCompleted = true; // ⚡ الآن فقط نوقف معالجة الإطارات
+
+      // Diagnostics كامل للرد (حافظ على التشخيص الأصلي!)
+      if (kDebugMode && finalResult != null) {
+        print('🔎 DIAGNOSTIC VerifyFace API Response:');
+        print('   • Keys = ${finalResult is Map ? finalResult.keys.toList() : "Not a Map: ${finalResult.runtimeType}"}');
+        if (finalResult is Map) {
+          finalResult.forEach((k, v) => print('   • [$k] => ${v.runtimeType.toString()}: $v'));
+        }
+        print('   • _isVerifiedMatchResult(result) = ${_isVerifiedMatchResult(finalResult)}');
+      }
+
+      if (finalResult != null && _isVerifiedMatchResult(finalResult)) {
+        // الفائقة الأهمية: العلم العالمي أولاً!
+        FaceApiService.markLastFaceSessionSuccessful(
+          employeeNumber: widget.employeeNumber,
+          sessionKind: 'verification',
+        );
+        _completedSuccessfully = true;
+        _faceMatched = true;
+        _successfulVerificationPayload = {
+          'Verified': true,
+          'VerificationAtUtc': DateTime.now().toUtc().toIso8601String(),
+          'ConfidenceScore': (finalResult!['ConfidenceScore'] as num?)?.toDouble(),
+          'LivenessScore': (finalResult!['LivenessScore'] as num?)?.toDouble(),
+          'ServerMessage': finalResult!['Message']?.toString(),
+          'VerificationContext': 'ATTENDANCE_CHECKPOINT',
+        };
+        final totalMs = DateTime.now().difference(perfTrace).inMilliseconds;
+        if (kDebugMode) {
+          final isMatch = (finalResult!['IsMatch'] == true) || (finalResult!['Matched'] == true) || (finalResult!['Success'] == true);
+          print('✅ DIAGNOSTIC [VERIFY-SUCCESS] ═══════════════════');
+          print('✅  الإجمالي: ${totalMs}ms | المحاولات: $verifyAttempt/$maxAttempts | Match=$isMatch');
+          print('✅  رسالة السيرفر: ${finalResult!['Message'] ?? '---'}');
+          print('✅  سيتم الإرجاع الآن فوراً عبر _smartClose + Global Flag مُفعّل.');
+          print('✅ DIAGNOSTIC [VERIFY-SUCCESS] ═══════════════════');
+        }
         if (mounted) {
-          Navigator.pop(context, true);
+          setState(() {
+            _borderColor = Colors.green;
+            _statusMessage = _t('verification_success');
+            _instructionMessage = _t('identity_matched');
+            _isProcessing = false;
+            _isVerifyingOnServer = false;
+          });
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            try { if (mounted) _smartClose(reason: 'verify-success', forceSuccess: true); }
+            catch (e) { if (kDebugMode) print('⚠️ فشل _smartClose في التحقق (سنعتمد على Global Flag): $e'); }
+          });
         }
       } else {
-        String errorMsg = result['Message'] ?? 'فشل التحقق';
-        _handleFailure(errorMsg);
+        final msg = lastApiErr ?? _t('verification_failed');
+        if (kDebugMode) {
+          print('❌ [VERIFY-PERF] فشل نهائي بعد $maxAttempts محاولات. السبب الأخير: $msg');
+          print('❌ [VERIFY-PERF] آخر مرحلة ناجحة قبل الفشل: $phase');
+        }
+        _handleFailure(msg);
       }
-    } catch (e) {
-      _handleFailure('حدث خطأ أثناء الاتصال: $e');
+    } catch (e, stack) {
+      if (kDebugMode) {
+        final msTotal = DateTime.now().difference(perfTrace).inMilliseconds;
+        print('❌❌❌ [VERIFY-PERF] استثناء فادح (${msTotal}ms) | آخر مرحلة ناجحة: $phase | المحاولة $verifyAttempt');
+        print('❌❌❌ [VERIFY-PERF] الخطأ: $e');
+        print('❌❌❌ [VERIFY-PERF] Stack: $stack');
+      }
+      _verificationCaptureCompleted = false;
+      _verificationStartRequested = false;
+      if (e is StateError) {
+        _handleFailure(e.message);
+      } else {
+        _handleFailure(_tParams('connection_error_with_error', {'error': e.toString().split('\n').first}));
+      }
     }
+  }
+
+  /// ⚡ حماية جديدة: Retry Mechanism لبدء عملية التحقق بعد Status.passed.
+  /// تحاول استدعاء _captureAndVerifyWithLiveness عدة مرات إذا فشلت الشروط الأولية،
+  /// حتى نتجنب تعليق الشاشة في حالة "2 من 2" للأبد بسبب Race Condition نادر.
+  Future<void> _tryStartVerificationWithRetry({
+    required int maxAttempts,
+    required int delayMs,
+  }) async {
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (!mounted) return;
+      final String reason1 = _isVerifyingOnServer ? "_isVerifyingOnServer=true" : "✓";
+      final String reason2 = _controller == null ? "controller=NULL" : "✓";
+      final String reason3 = (_controller != null && !_controller!.value.isInitialized) ? "controller not init" : "✓";
+      final String reasonsFailed = [reason1, reason2, reason3].where((e) => e != "✓").join(", ");
+      if (kDebugMode) {
+        print('🔄 [VERIFY-START] محاولة $attempt/$maxAttempts: الفشل المحتمل=[$reasonsFailed]');
+      }
+      // #region debug-point A:start-retry-attempt
+      unawaited(_reportDebugEvent(
+        'A',
+        'face_verification_screen_mobile.dart:_tryStartVerificationWithRetry',
+        'Verification start retry tick',
+        data: {
+          'attempt': attempt,
+          'maxAttempts': maxAttempts,
+          'reasonsFailed': reasonsFailed,
+          'isVerifyingOnServer': _isVerifyingOnServer,
+          'controllerInitialized': _controller?.value.isInitialized ?? false,
+          'isStreamingImages': _controller?.value.isStreamingImages ?? false,
+        },
+      ));
+      // #endregion
+
+      // 🚨 تم إزالة _isProcessing من الشروط (تناقض قاتل مع Status.passed!)
+      if (!_isVerifyingOnServer &&
+          _controller != null &&
+          _controller!.value.isInitialized) {
+        if (kDebugMode) print('🔄 [VERIFY-START-$attempt] ✅ جميع الشروط مستوفاة → بدء التحقق فوراً');
+        // #region debug-point A:start-retry-success
+        unawaited(_reportDebugEvent(
+          'A',
+          'face_verification_screen_mobile.dart:_tryStartVerificationWithRetry',
+          'Verification start conditions satisfied',
+          data: {
+            'attempt': attempt,
+          },
+        ));
+        // #endregion
+        await _captureAndVerifyWithLiveness();
+        return;
+      }
+
+      if (kDebugMode) {
+        print('🔄 [VERIFY-START-$attempt] ⚠️ فشلت الشروط: [$reasonsFailed] → انتظار ${delayMs}ms ثم إعادة المحاولة');
+      }
+      await Future.delayed(Duration(milliseconds: delayMs));
+    }
+    if (kDebugMode) {
+      print('❌ [VERIFY-START] ❌ فشلت جميع $maxAttempts محاولات بدء التحقق → إعادة البدء من الصفر مع رسالة خطأ...');
+    }
+    if (mounted) {
+      // #region debug-point A:start-retry-exhausted
+      unawaited(_reportDebugEvent(
+        'A',
+        'face_verification_screen_mobile.dart:_tryStartVerificationWithRetry',
+        'Verification start retries exhausted',
+        data: {
+          'maxAttempts': maxAttempts,
+          'isVerifyingOnServer': _isVerifyingOnServer,
+          'controllerExists': _controller != null,
+          'controllerInitialized': _controller?.value.isInitialized ?? false,
+        },
+      ));
+      // #endregion
+      setState(() {
+        _statusMessage = 'تعطل بدء عملية التحقق من البصمة. تم إعادة بدء الفحص تلقائياً...';
+        _borderColor = Colors.redAccent;
+        _isProcessing = false;
+        _isVerifyingOnServer = false;
+      });
+      _verificationStartRequested = false;
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) _resetAndStartOver();
+      });
+    }
+  }
+
+  void _handleLivenessResultFailure(LivenessResult result) {
+    setState(() {
+      _isProcessing = false;
+      _isVerifyingOnServer = false;
+      _borderColor = Colors.red;
+      _statusMessage = result.message ?? _t('liveness_failed_generic');
+      _instructionMessage = _t('try_again');
+    });
+    _verificationStartRequested = false;
+    _logSecurityEvent('LIVENESS_FAIL_${result.status.name}');
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted && !_faceMatched) _resetAndStartOver();
+    });
   }
 
   void _handleFailure(String message) {
@@ -180,21 +1230,42 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
     setState(() {
       _borderColor = Colors.red;
       _statusMessage = message;
-      _instructionMessage = 'يرجى المحاولة مرة أخرى';
+      _instructionMessage = _t('try_again');
       _isProcessing = false;
+      _isVerifyingOnServer = false;
     });
-
+    _verificationStartRequested = false;
     Future.delayed(const Duration(seconds: 3), () {
       if (mounted && !_faceMatched) {
-        _startLivenessProcess();
+        _resetAndStartOver();
       }
     });
+  }
+
+  void _resetAndStartOver() {
+    if (!mounted) return;
+    setState(() {
+      _isProcessing = false;
+      _isVerifyingOnServer = false;
+      _previousTrackedFace = null;
+      _frameCounter = 0;
+      _verificationCaptureCompleted = false; // ⚡ إعادة تفعيل معالجة الإطارات عند إعادة البدء
+      _verificationStartRequested = false;
+      _closeHandled = false;
+      _successfulVerificationPayload = null;
+      _lockedAnalysisSnapshot = null;
+      _currentDetectedFace = null;
+      _currentFaceCount = 0;
+      _analysisSnapshot = const PassiveLivenessSnapshot.empty();
+    });
+    _livenessService.initialize();
+    unawaited(_resumeImageStreamIfNeeded());
   }
 
   Future<void> _resetFace() async {
     setState(() {
       _isProcessing = true;
-      _statusMessage = 'جاري إعادة تعيين بصمة الوجه...';
+      _statusMessage = _t('resetting_face');
     });
 
     try {
@@ -203,23 +1274,41 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
       if (result['Success'] == true) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('✅ تم إعادة تعيين بصمة الوجه بنجاح')),
+            SnackBar(content: Text(_t('face_reset_success'))),
           );
           Navigator.pop(context, false);
         }
       } else {
-        _handleFailure(result['Message'] ?? 'فشل إعادة التعيين');
+        _handleFailure(result['Message'] ?? _t('face_reset_failed'));
       }
     } catch (e) {
-      _handleFailure('خطأ: $e');
+      _handleFailure(_tParams('error_with_error', {'error': e.toString()}));
     }
   }
 
-  @override
-  void dispose() {
-    _controller?.dispose();
-    _faceDetector.close();
-    super.dispose();
+  Widget _buildMetricChip(String label, double value, {required bool passed}) {
+    final normalized = value.clamp(0.0, 1.0);
+    final Color chipColor = passed
+        ? Colors.greenAccent
+        : normalized >= 0.5
+            ? Colors.orangeAccent
+            : Colors.redAccent;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: chipColor.withOpacity(0.8)),
+      ),
+      child: Text(
+        '${passed ? "✓ " : ""}$label ${(normalized * 100).round()}%',
+        style: TextStyle(
+          color: chipColor,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
   }
 
   @override
@@ -232,9 +1321,16 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
     }
 
     final previewSize = _controller?.value.previewSize;
+    final displaySnapshot = _displaySnapshot;
 
-    return Scaffold(
-      backgroundColor: Colors.black,
+    return PopScope<Object?>(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _smartClose();
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
       body: Stack(
         children: [
           Positioned.fill(
@@ -253,61 +1349,199 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
 
                   return Transform.scale(
                     scale: scale,
-                    child: Center(child: CameraPreview(controller)),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Center(child: CameraPreview(controller)),
+                        IgnorePointer(
+                          child: CustomPaint(
+                            painter: _FaceGuidePainter(
+                              faceDetected: _currentDetectedFace != null,
+                              readiness: displaySnapshot.overallScore,
+                              color: _borderColor,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   );
                 },
               ),
             ),
           ),
           Positioned(
-            top: 100,
+            top: 60,
             left: 0,
             right: 0,
             child: Center(
               child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                 decoration: BoxDecoration(
                   color: Colors.black54,
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(
-                  _instructionMessage,
+                  _t('liveness_title'),
                   style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500),
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold),
                 ),
               ),
             ),
           ),
-          Center(
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 300),
-              width: 280,
-              height: 280,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: _borderColor, width: 4),
-                boxShadow: [
-                  BoxShadow(
-                    color: _borderColor.withOpacity(0.3),
-                    blurRadius: 20,
-                    spreadRadius: 5,
+          if (_challengeMessage.isNotEmpty)
+            Positioned(
+              top: 120,
+              left: 16,
+              right: 16,
+              child: Center(
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        _borderColor.withOpacity(0.95),
+                        _borderColor.withOpacity(0.75),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(22),
+                    boxShadow: [
+                      BoxShadow(
+                        color: _borderColor.withOpacity(0.4),
+                        blurRadius: 20,
+                        spreadRadius: 2,
+                      ),
+                    ],
                   ),
-                ],
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 500),
+                        width: 12,
+                        height: 12,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.white.withOpacity(0.6),
+                              blurRadius: 10,
+                              spreadRadius: 2,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Flexible(
+                        child: Text(
+                          _challengeMessage,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
+            ),
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: 205,
+            child: Column(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: LinearProgressIndicator(
+                    value: _displaySignalProgress,
+                    minHeight: 10,
+                    backgroundColor: Colors.white24,
+                    valueColor: AlwaysStoppedAnimation<Color>(_borderColor),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  _buildSignalSummaryText(),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _buildOverallSnapshotText(),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _buildMetricChip(
+                      _lang() == 'ar' ? 'التموضع' : 'Tracking',
+                      displaySnapshot.trackingScore,
+                      passed: displaySnapshot.trackingPassed,
+                    ),
+                    _buildMetricChip(
+                      _lang() == 'ar' ? 'الوضعية' : 'Pose',
+                      displaySnapshot.poseScore,
+                      passed: displaySnapshot.posePassed,
+                    ),
+                    _buildMetricChip(
+                      _lang() == 'ar' ? 'العينان' : 'Eyes',
+                      displaySnapshot.eyeActivityScore,
+                      passed: displaySnapshot.eyeActivityPassed,
+                    ),
+                    _buildMetricChip(
+                      _lang() == 'ar' ? 'التنفس' : 'Breath',
+                      displaySnapshot.breathingScore,
+                      passed: displaySnapshot.breathingPassed,
+                    ),
+                    _buildMetricChip(
+                      _lang() == 'ar' ? 'النسيج' : 'Texture',
+                      displaySnapshot.textureScore,
+                      passed: displaySnapshot.texturePassed,
+                    ),
+                    _buildMetricChip(
+                      _lang() == 'ar' ? 'المعالم' : 'Landmarks',
+                      displaySnapshot.landmarkScore,
+                      passed: displaySnapshot.landmarkPassed,
+                    ),
+                    _buildMetricChip(
+                      _lang() == 'ar' ? 'مقاومة الانتحال' : 'Anti-spoof',
+                      displaySnapshot.antiSpoofScore,
+                      passed: displaySnapshot.antiSpoofPassed,
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
           Positioned(
-            bottom: 60,
+            bottom: 50,
             left: 0,
             right: 0,
             child: Container(
               padding: const EdgeInsets.all(20),
               child: Column(
                 children: [
-                  if (_isProcessing)
+                  if (_isProcessing || _isVerifyingOnServer)
                     const Padding(
                       padding: EdgeInsets.only(bottom: 15),
                       child: CircularProgressIndicator(color: Colors.orange),
@@ -321,15 +1555,26 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
                       fontWeight: FontWeight.bold,
                     ),
                   ),
-                  if (!_isProcessing && !_faceMatched) ...[
-                    const SizedBox(height: 30),
+                  const SizedBox(height: 6),
+                  if (_instructionMessage.isNotEmpty && !_isProcessing && !_isVerifyingOnServer)
+                    Text(
+                      _instructionMessage,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.8),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w400,
+                      ),
+                    ),
+                  if (!_isProcessing && !_isVerifyingOnServer && !_faceMatched) ...[
+                    const SizedBox(height: 26),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         ElevatedButton.icon(
-                          onPressed: _startLivenessProcess,
+                          onPressed: _resetAndStartOver,
                           icon: const Icon(Icons.refresh),
-                          label: const Text('إعادة المحاولة'),
+                          label: Text(_t('retry')),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.blue,
                             foregroundColor: Colors.white,
@@ -342,7 +1587,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
                           OutlinedButton.icon(
                             onPressed: _resetFace,
                             icon: const Icon(Icons.delete_forever),
-                            label: const Text('إعادة تعيين'),
+                            label: Text(_t('reset')),
                             style: OutlinedButton.styleFrom(
                               side: const BorderSide(color: Colors.red),
                               foregroundColor: Colors.red,
@@ -363,12 +1608,104 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen> {
             left: 20,
             child: IconButton(
               icon: const Icon(Icons.close, color: Colors.white, size: 28),
-              onPressed: () => Navigator.pop(context, false),
+              onPressed: _smartClose,
             ),
           ),
         ],
+      ),
       ),
     );
   }
 }
 
+class _FaceGuidePainter extends CustomPainter {
+  final bool faceDetected;
+  final double readiness;
+  final Color color;
+
+  _FaceGuidePainter({
+    required this.faceDetected,
+    required this.readiness,
+    required this.color,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final frameWidth = size.width * 0.64;
+    final frameHeight = size.height * 0.42;
+    final rect = Rect.fromCenter(
+      center: Offset(size.width / 2, size.height * 0.47),
+      width: frameWidth,
+      height: frameHeight,
+    );
+
+    final glowStrength = readiness.clamp(0.18, 1.0);
+    final framePaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = faceDetected ? 4.0 : 3.0;
+    final glowPaint = Paint()
+      ..color = color.withOpacity(0.12 + (glowStrength * 0.12))
+      ..style = PaintingStyle.fill;
+    final cornerPaint = Paint()
+      ..color = color.withOpacity(0.95)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 5.0
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect.inflate(10), const Radius.circular(28)),
+      glowPaint,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(24)),
+      framePaint,
+    );
+
+    const double cornerLen = 34;
+    final corners = [
+      rect.topLeft,
+      rect.topRight,
+      rect.bottomLeft,
+      rect.bottomRight,
+    ];
+    for (final corner in corners) {
+      final bool isLeft = corner.dx == rect.left;
+      final bool isTop = corner.dy == rect.top;
+      final path = Path()
+        ..moveTo(corner.dx, corner.dy + (isTop ? cornerLen : -cornerLen))
+        ..lineTo(corner.dx, corner.dy)
+        ..lineTo(corner.dx + (isLeft ? cornerLen : -cornerLen), corner.dy);
+      canvas.drawPath(path, cornerPaint);
+    }
+
+    if (faceDetected) {
+      final scannerPaint = Paint()
+        ..color = color.withOpacity(0.35)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0;
+      final scannerY = rect.top + ((rect.height - 8) * readiness.clamp(0.0, 1.0));
+      canvas.drawLine(
+        Offset(rect.left + 12, scannerY),
+        Offset(rect.right - 12, scannerY),
+        scannerPaint,
+      );
+
+      final dotPaint = Paint()
+        ..color = Colors.white.withOpacity(0.9)
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(
+        Offset(rect.center.dx, rect.top - 12),
+        4.5,
+        dotPaint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _FaceGuidePainter oldDelegate) {
+    return oldDelegate.faceDetected != faceDetected ||
+        oldDelegate.readiness != readiness ||
+        oldDelegate.color != color;
+  }
+}

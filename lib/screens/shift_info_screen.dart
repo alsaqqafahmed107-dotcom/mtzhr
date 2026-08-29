@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:smart_vision/models/employee_full_info.dart';
 import 'package:smart_vision/models/shift.dart';
 import 'package:smart_vision/models/work_info_models.dart';
 import 'package:smart_vision/models/location.dart';
@@ -30,6 +31,7 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
   bool _isLoading = true;
   String? _error;
   String? _shiftNotice;
+  EmployeeFullInfo? _employeeInfo;
   List<ShiftData> _shifts = [];
   List<EmployeeAssignedLocation> _assignedLocations = [];
   String? _locationsNotice;
@@ -46,6 +48,78 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
   List<WorkDay> get _workDays =>
       (_currentShift?.workDays ?? []).map(WorkDay.fromShiftWorkDay).toList();
 
+  String? _weekdayKeyFrom(int dayNumber, String rawName) {
+    final normalized = rawName
+        .trim()
+        .toLowerCase()
+        .replaceAll('أ', 'ا')
+        .replaceAll('إ', 'ا')
+        .replaceAll('آ', 'ا')
+        .replaceAll('ى', 'ي')
+        .replaceAll('ة', 'ه')
+        .replaceAll(RegExp(r'\s+'), '');
+
+    final byName = <String, String>{
+      'الاحد': 'weekday_sunday',
+      'الأحد': 'weekday_sunday',
+      'احد': 'weekday_sunday',
+      'الاثنين': 'weekday_monday',
+      'الإثنين': 'weekday_monday',
+      'اثنين': 'weekday_monday',
+      'الثلاثاء': 'weekday_tuesday',
+      'الثلاثا': 'weekday_tuesday',
+      'ثلاثاء': 'weekday_tuesday',
+      'الاربعاء': 'weekday_wednesday',
+      'الأربعاء': 'weekday_wednesday',
+      'اربعاء': 'weekday_wednesday',
+      'الخميس': 'weekday_thursday',
+      'خميس': 'weekday_thursday',
+      'الجمعة': 'weekday_friday',
+      'جمعه': 'weekday_friday',
+      'السبت': 'weekday_saturday',
+      'سبت': 'weekday_saturday',
+      'sunday': 'weekday_sunday',
+      'sun': 'weekday_sunday',
+      'monday': 'weekday_monday',
+      'mon': 'weekday_monday',
+      'tuesday': 'weekday_tuesday',
+      'tue': 'weekday_tuesday',
+      'wednesday': 'weekday_wednesday',
+      'wed': 'weekday_wednesday',
+      'thursday': 'weekday_thursday',
+      'thu': 'weekday_thursday',
+      'friday': 'weekday_friday',
+      'fri': 'weekday_friday',
+      'saturday': 'weekday_saturday',
+      'sat': 'weekday_saturday',
+    };
+
+    if (byName.containsKey(normalized)) {
+      return byName[normalized];
+    }
+
+    if (dayNumber >= 1 && dayNumber <= 7) {
+      const byNumber = <int, String>{
+        1: 'weekday_sunday',
+        2: 'weekday_monday',
+        3: 'weekday_tuesday',
+        4: 'weekday_wednesday',
+        5: 'weekday_thursday',
+        6: 'weekday_friday',
+        7: 'weekday_saturday',
+      };
+      return byNumber[dayNumber];
+    }
+
+    return null;
+  }
+
+  String _localizedWeekdayName(WorkDay day, String lang) {
+    final key = _weekdayKeyFrom(day.dayNumber, day.dayName);
+    if (key == null) return day.dayName;
+    return Translations.getText(key, lang);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -61,6 +135,8 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
     });
 
     try {
+      final employeeInfo =
+          await ApiService().getEmployeeFullInfo(widget.clientId, widget.email);
       final locations = await ApiService.getEmployeeAssignedLocations(
         widget.clientId,
         widget.employeeNumber,
@@ -87,6 +163,7 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
 
       if (!mounted) return;
       setState(() {
+        _employeeInfo = employeeInfo;
         _assignedLocations = locations;
         _locationsNotice = locationsNotice;
         _shifts = shifts;
@@ -188,11 +265,12 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
     final languageService =
         Provider.of<LanguageService>(context, listen: false);
     final lang = languageService.currentLocale.languageCode;
-    final start = shiftInfo.assignmentStartDate;
-    final end = shiftInfo.assignmentEndDate;
-    final startText = _formatDate(start);
-    final endText =
-        end == null ? Translations.getText('ongoing', lang) : _formatDate(end);
+    final hireDateText = _employeeInfo?.hireDate.trim().isNotEmpty == true
+        ? _formatRawDate(_employeeInfo!.hireDate)
+        : Translations.getText('not_specified', lang);
+    final endDateText = _employeeInfo?.contractEndDate.trim().isNotEmpty == true
+        ? _formatRawDate(_employeeInfo!.contractEndDate)
+        : Translations.getText('ongoing', lang);
 
     final cardColor = isNight ? scheme.primaryContainer : scheme.surface;
     final fg = isNight ? scheme.onPrimaryContainer : scheme.onSurface;
@@ -232,22 +310,31 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
             const SizedBox(height: 14),
             _kvRow(
               icon: Icons.schedule,
-              label: Translations.getText('shift_time', lang),
-              value: '${shiftInfo.dailyStartTime} - ${shiftInfo.dailyEndTime}',
+              label: Translations.getText('primary_shift_period', lang),
+              value: _formatShiftTime(_currentShift!),
               inverse: isNight,
             ),
+            if (_hasSecondShiftPeriod(_currentShift!)) ...[
+              const SizedBox(height: 10),
+              _kvRow(
+                icon: Icons.schedule_outlined,
+                label: Translations.getText('secondary_shift_period', lang),
+                value: _formatSecondShiftTime(_currentShift!),
+                inverse: isNight,
+              ),
+            ],
             const SizedBox(height: 10),
             _kvRow(
               icon: Icons.date_range,
-              label: Translations.getText('assignment_start', lang),
-              value: startText,
+              label: Translations.getText('hire_date', lang),
+              value: hireDateText,
               inverse: isNight,
             ),
             const SizedBox(height: 10),
             _kvRow(
               icon: Icons.event_busy,
               label: Translations.getText('assignment_end', lang),
-              value: endText,
+              value: endDateText,
               inverse: isNight,
             ),
             const SizedBox(height: 10),
@@ -287,6 +374,7 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
                       builder: (_) => AllShiftsScreen(
                         clientId: widget.clientId,
                         employeeNumber: widget.employeeNumber,
+                        email: widget.email,
                         employeeId: widget.employeeId,
                       ),
                     ),
@@ -456,6 +544,7 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
                 final statusColor = isWorking ? Colors.green : scheme.error;
                 final statusTextColor =
                     isWorking ? scheme.onSurface : scheme.onSurfaceVariant;
+                final dayName = _localizedWeekdayName(day, lang);
                 return Padding(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
@@ -466,7 +555,7 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          day.dayName,
+                          dayName,
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight:
@@ -558,17 +647,63 @@ class _ShiftInfoScreenState extends State<ShiftInfoScreen> {
     final d = dt.day.toString().padLeft(2, '0');
     return '$y-$m-$d';
   }
+
+  String _formatRawDate(String value) {
+    final normalized = value.trim();
+    if (normalized.isEmpty) return '';
+    final parsed = DateTime.tryParse(normalized);
+    if (parsed == null) return normalized;
+    return _formatDate(parsed);
+  }
+
+  String _formatShiftTime(ShiftData shift) {
+    final timeRange = (shift.timeRange ?? '').trim();
+    if (timeRange.isNotEmpty) return timeRange;
+
+    final startLabel = (shift.startTimeLabel ?? '').trim();
+    final endLabel = (shift.endTimeLabel ?? '').trim();
+    if (startLabel.isNotEmpty && endLabel.isNotEmpty) {
+      return '$startLabel - $endLabel';
+    }
+
+    final start = shift.defaultStartTime.trim();
+    final end = shift.defaultEndTime.trim();
+    if (start.isNotEmpty && end.isNotEmpty) {
+      return '$start - $end';
+    }
+    if (start.isNotEmpty) return start;
+    if (end.isNotEmpty) return end;
+    return '-';
+  }
+
+  bool _hasSecondShiftPeriod(ShiftData shift) {
+    return shift.secondStartTime.trim().isNotEmpty ||
+        shift.secondEndTime.trim().isNotEmpty;
+  }
+
+  String _formatSecondShiftTime(ShiftData shift) {
+    final start = shift.secondStartTime.trim();
+    final end = shift.secondEndTime.trim();
+    if (start.isNotEmpty && end.isNotEmpty) {
+      return '$start - $end';
+    }
+    if (start.isNotEmpty) return start;
+    if (end.isNotEmpty) return end;
+    return '-';
+  }
 }
 
 class AllShiftsScreen extends StatefulWidget {
   final int clientId;
   final String employeeNumber;
+  final String email;
   final int? employeeId;
 
   const AllShiftsScreen({
     super.key,
     required this.clientId,
     required this.employeeNumber,
+    required this.email,
     this.employeeId,
   });
 
@@ -579,6 +714,7 @@ class AllShiftsScreen extends StatefulWidget {
 class _AllShiftsScreenState extends State<AllShiftsScreen> {
   bool _isLoading = true;
   String? _error;
+  EmployeeFullInfo? _employeeInfo;
   List<ShiftData> _shifts = [];
   String? _notice;
 
@@ -596,6 +732,8 @@ class _AllShiftsScreenState extends State<AllShiftsScreen> {
     });
 
     try {
+      final employeeInfo =
+          await ApiService().getEmployeeFullInfo(widget.clientId, widget.email);
       final identifiers = <String?>[
         widget.employeeNumber,
         widget.employeeId?.toString(),
@@ -610,6 +748,7 @@ class _AllShiftsScreenState extends State<AllShiftsScreen> {
 
       if (!mounted) return;
       setState(() {
+        _employeeInfo = employeeInfo;
         _shifts = shifts;
         _notice = shifts.isEmpty ? ApiService.lastEmployeeShiftMessage : null;
         _isLoading = false;
@@ -681,6 +820,20 @@ class _AllShiftsScreenState extends State<AllShiftsScreen> {
                               final scheme = Theme.of(context).colorScheme;
                               final shift = _shifts[index];
                               final info = ShiftInfo.fromShiftData(shift);
+                              final hireDateText =
+                                  _employeeInfo?.hireDate.trim().isNotEmpty ==
+                                          true
+                                      ? _formatRawDate(_employeeInfo!.hireDate)
+                                      : Translations.getText(
+                                          'not_specified', lang);
+                              final endDateText = _employeeInfo
+                                          ?.contractEndDate
+                                          .trim()
+                                          .isNotEmpty ==
+                                      true
+                                  ? _formatRawDate(
+                                      _employeeInfo!.contractEndDate)
+                                  : Translations.getText('ongoing', lang);
                               final isNight = info.isNightShift;
                               final bg = isNight
                                   ? scheme.primaryContainer
@@ -736,15 +889,35 @@ class _AllShiftsScreenState extends State<AllShiftsScreen> {
                                         ],
                                       ),
                                       const SizedBox(height: 10),
-                                      Text(
-                                        '${info.dailyStartTime} - ${info.dailyEndTime}',
-                                        style: TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                            color: sub),
+                                      Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            '${Translations.getText('primary_shift_period', lang)}: ${_formatShiftTime(shift)}',
+                                            style: TextStyle(
+                                                fontWeight: FontWeight.w600,
+                                                color: sub),
+                                          ),
+                                          if (_hasSecondShiftPeriod(shift)) ...[
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              '${Translations.getText('secondary_shift_period', lang)}: ${_formatSecondShiftTime(shift)}',
+                                              style: TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  color: sub),
+                                            ),
+                                          ],
+                                        ],
                                       ),
                                       const SizedBox(height: 8),
                                       Text(
-                                        '${Translations.getText('start', lang)}: ${info.assignmentStartDate.year.toString().padLeft(4, '0')}-${info.assignmentStartDate.month.toString().padLeft(2, '0')}-${info.assignmentStartDate.day.toString().padLeft(2, '0')}',
+                                        '${Translations.getText('hire_date', lang)}: $hireDateText',
+                                        style: TextStyle(color: sub),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        '${Translations.getText('assignment_end', lang)}: $endDateText',
                                         style: TextStyle(color: sub),
                                       ),
                                     ],
@@ -756,5 +929,53 @@ class _AllShiftsScreenState extends State<AllShiftsScreen> {
                         ),
                 ),
     );
+  }
+
+  String _formatRawDate(String value) {
+    final normalized = value.trim();
+    if (normalized.isEmpty) return '';
+    final parsed = DateTime.tryParse(normalized);
+    if (parsed == null) return normalized;
+
+    final y = parsed.year.toString().padLeft(4, '0');
+    final m = parsed.month.toString().padLeft(2, '0');
+    final d = parsed.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
+  }
+
+  String _formatShiftTime(ShiftData shift) {
+    final timeRange = (shift.timeRange ?? '').trim();
+    if (timeRange.isNotEmpty) return timeRange;
+
+    final startLabel = (shift.startTimeLabel ?? '').trim();
+    final endLabel = (shift.endTimeLabel ?? '').trim();
+    if (startLabel.isNotEmpty && endLabel.isNotEmpty) {
+      return '$startLabel - $endLabel';
+    }
+
+    final start = shift.defaultStartTime.trim();
+    final end = shift.defaultEndTime.trim();
+    if (start.isNotEmpty && end.isNotEmpty) {
+      return '$start - $end';
+    }
+    if (start.isNotEmpty) return start;
+    if (end.isNotEmpty) return end;
+    return '-';
+  }
+
+  bool _hasSecondShiftPeriod(ShiftData shift) {
+    return shift.secondStartTime.trim().isNotEmpty ||
+        shift.secondEndTime.trim().isNotEmpty;
+  }
+
+  String _formatSecondShiftTime(ShiftData shift) {
+    final start = shift.secondStartTime.trim();
+    final end = shift.secondEndTime.trim();
+    if (start.isNotEmpty && end.isNotEmpty) {
+      return '$start - $end';
+    }
+    if (start.isNotEmpty) return start;
+    if (end.isNotEmpty) return end;
+    return '-';
   }
 }

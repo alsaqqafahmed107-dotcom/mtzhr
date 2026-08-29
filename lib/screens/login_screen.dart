@@ -8,6 +8,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 
 import '../services/language_service.dart';
 import '../services/translations.dart';
+import '../services/approval_permission_service.dart';
 import '../models/api_models.dart' as api_models;
 import 'home_screen.dart';
 import 'forgot_password_email_screen.dart';
@@ -15,6 +16,8 @@ import '../widgets/responsive_center.dart';
 import '../utils/platform_helper.dart';
 
 import '../services/api_service.dart';
+import '../services/face_api_service.dart';
+import 'face_enrollment_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -297,8 +300,78 @@ class _LoginScreenState extends State<LoginScreen>
 
       if (mounted) {
         if (response.success && response.employee != null) {
+          final emp = response.employee!;
+          var effectiveEmployee = emp;
+
+          final embedded = emp.embeddedApprovalPermission;
+          if (embedded != null &&
+              embedded.isValid &&
+              embedded.verifySignatureIntegrity() &&
+              embedded.clientId == emp.clientID &&
+              embedded.employeeId == emp.employeeID &&
+              embedded.employeeNumber == emp.employeeNumber) {
+            ApprovalPermissionService.updateCached(embedded);
+            try {
+              await ApprovalPermissionService.persistSecurely(
+                  embedded.toSecureJson());
+            } catch (_) {}
+          } else if (emp.secureApprovalToken != null &&
+              emp.secureApprovalToken!.isNotEmpty) {
+            try {
+              final decoded =
+                  SecureApprovalPermission.fromSecureJson(emp.secureApprovalToken!);
+              if (decoded.isValid && decoded.verifySignatureIntegrity()) {
+                ApprovalPermissionService.updateCached(decoded);
+                try {
+                  await ApprovalPermissionService.persistSecurely(
+                      decoded.toSecureJson());
+                } catch (_) {}
+              }
+            } catch (_) {}
+          } else {
+            try {
+              final probe = await ApiService.getPendingRequestsForApproval(
+                emp.clientID,
+                approverId:
+                    int.tryParse(emp.employeeNumber) ?? emp.employeeID,
+              ).timeout(
+                const Duration(seconds: 6),
+                onTimeout: () =>
+                    <String, dynamic>{'Success': false, 'Data': []},
+              ).catchError((_) =>
+                  <String, dynamic>{'Success': false, 'Data': []});
+              final probeData = probe['Data'] as List<dynamic>?;
+              final serverAccess = probe['HasApprovalAccess'] == true ||
+                  (probe['HasApprovalAccess'] is String &&
+                      probe['HasApprovalAccess'].toString().toLowerCase() ==
+                          'true') ||
+                  (probeData != null && probeData.isNotEmpty);
+              final finalPerm =
+                  ApprovalPermissionService.evaluateApproverFromSignals(
+                clientId: emp.clientID,
+                employeeId: emp.employeeID,
+                employeeNumber: emp.employeeNumber,
+                rulesRaw: emp.rules,
+                serverApprovalAccess: probe['HasApprovalAccess'] == true ||
+                    (probe['HasApprovalAccess'] is String &&
+                        probe['HasApprovalAccess']
+                            .toString()
+                            .toLowerCase() ==
+                            'true'),
+                pendingApprovalItems: probeData ?? const [],
+              );
+              ApprovalPermissionService.updateCached(finalPerm);
+              try {
+                await ApprovalPermissionService.persistSecurely(
+                    finalPerm.toSecureJson());
+              } catch (_) {}
+            } catch (_) {
+              ApprovalPermissionService.invalidateCache();
+            }
+          }
+
           // حفظ البيانات إذا تم تحديد "تذكرني"
-          await _saveCredentials(response.employee);
+          await _saveCredentials(effectiveEmployee);
 
           // تسجيل الدخول ناجح
 
@@ -330,19 +403,24 @@ class _LoginScreenState extends State<LoginScreen>
             ),
           );
 
-          // الانتقال إلى الصفحة الرئيسية
           await Future.delayed(const Duration(milliseconds: 500));
-          if (mounted) {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(
-                builder: (context) => HomeScreen(
-                  employeeId: response.employee!.employeeNumber,
-                  employeeData: response.employee!,
-                ),
+          if (!mounted) return;
+
+          final canEnter = await _ensureFaceEnrollmentIfNeeded(
+            response.employee!,
+            lang,
+          );
+          if (!mounted || !canEnter) return;
+
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => HomeScreen(
+                employeeId: response.employee!.employeeNumber,
+                employeeData: response.employee!,
               ),
-            );
-          }
+            ),
+          );
         } else {
           // خطأ في تسجيل الدخول
 
@@ -363,6 +441,159 @@ class _LoginScreenState extends State<LoginScreen>
           _isLoading = false;
         });
       }
+    }
+  }
+
+  Future<bool> _ensureFaceEnrollmentIfNeeded(
+    api_models.EmployeeData employee,
+    String lang,
+  ) async {
+    if (kIsWeb) {
+      return true;
+    }
+
+    // معرف تتبع التشخيصي (Trace ID)
+    final String tid = DateTime.now().millisecondsSinceEpoch.toRadixString(36);
+    if (kDebugMode) {
+      print('🔐 [LOGIN-FACE-T$tid] ═══════════════════════════════════');
+      print('🔐 [LOGIN-FACE-T$tid] بدء التأكد من تسجيل البصمة للموظف: ${employee.employeeNumber}');
+      print('🔐 [LOGIN-FACE-T$tid] ═══════════════════════════════════');
+    }
+
+    try {
+      final faceStatus = await FaceApiService.getFaceStatus(
+        employee.clientID,
+        employee.employeeNumber,
+      );
+
+      if (faceStatus['Success'] != true) {
+        if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] فشل getFaceStatus (خطأ سيرفر) → سمح بالدخول كحماية (fallback safe).');
+        return true;
+      }
+
+      final attendanceMethod =
+          int.tryParse(faceStatus['AttendanceMethod']?.toString() ?? '0') ?? 0;
+      final shouldRequireFace = faceStatus['ForceEnroll'] == true ||
+          faceStatus['IsFaceRequired'] == true ||
+          attendanceMethod == 1 ||
+          attendanceMethod == 2;
+
+      final hasTemplate = faceStatus['HasFaceTemplate'] == true;
+
+      if (kDebugMode) {
+        print('🔐 [LOGIN-FACE-T$tid] Status: shouldRequireFace=$shouldRequireFace | hasTemplate=$hasTemplate | AttendanceMethod=$attendanceMethod');
+      }
+
+      if (!shouldRequireFace || hasTemplate) {
+        if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] لا تحتاج للتسجيل أو مسجل بالفعل → نسمح بالدخول ✅');
+        return true;
+      }
+
+      // ==========================================
+      // 🛡️ نظام QUADRUPLE FAILSAFE لقبول نتيجة التسجيل
+      // ==========================================
+      // 1. النتيجة الأساسية من Navigator (إذا نجحت)
+      // 2. Flexible Truthy Check (قبول أي قيمة صحيحة حتى لو لم تكن bool صريحة)
+      // 3. Fallback 1: Global Static Flag مباشرة بعد Navigator
+      // 4. Fallback 2: تأخير 600ms ثم فحص العلامة العالمية مرة أخرى + (اختياري) إعادة فحص HasFaceTemplate من السيرفر
+      // ==========================================
+      if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] يحتاج تسجيل بصمة → فتح شاشة التسجيل...');
+      Object? navResultRaw;
+      try {
+        navResultRaw = await Navigator.push<Object?>(
+          context,
+          MaterialPageRoute(
+            builder: (context) => FaceEnrollmentScreen(
+              employeeNumber: employee.employeeNumber,
+              clientId: employee.clientID,
+            ),
+          ),
+        );
+      } catch (navErr, stack) {
+        if (kDebugMode) {
+          print('🔐 [LOGIN-FACE-T$tid] ❌ استثناء أثناء Navigator.push للشاشة: $navErr');
+          print('🔐 [LOGIN-FACE-T$tid] Stack: $stack');
+        }
+        navResultRaw = null;
+      }
+
+      // 1 + 2: Flexible Truthy Check للنتيجة المرتجعة
+      bool enrolled = false;
+      if (navResultRaw != null) {
+        if (navResultRaw is bool) {
+          enrolled = navResultRaw;
+        } else if (navResultRaw is Map) {
+          enrolled = (navResultRaw['Success'] == true || navResultRaw['success'] == true || navResultRaw['Enrolled'] == true);
+        } else {
+          enrolled = navResultRaw.toString().toLowerCase() == 'true' || navResultRaw.toString().trim().isNotEmpty;
+        }
+      }
+      if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] النتيجة من Navigator: ${navResultRaw.runtimeType} = $navResultRaw | enrolled (بعد Flexible) = $enrolled');
+
+      // 3. Fallback 1: Global Flag مباشرة
+      if (!enrolled) {
+        final fallback1 = FaceApiService.verifyLastFaceSessionSuccess(employeeNumber: employee.employeeNumber);
+        if (fallback1) {
+          enrolled = true;
+          FaceApiService.clearLastFaceSession();
+          if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] 🛡️ Fallback 1 (Global Flag مباشر): تم تفعيله ✅');
+        }
+      }
+
+      // 4. Fallback 2: تأخير 600ms + إعادة فحص
+      if (!enrolled) {
+        await Future.delayed(const Duration(milliseconds: 600));
+        final fallback2 = FaceApiService.verifyLastFaceSessionSuccess(employeeNumber: employee.employeeNumber);
+        if (fallback2) {
+          enrolled = true;
+          FaceApiService.clearLastFaceSession();
+          if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] 🛡️🛡️ Fallback 2 (Global Flag بعد 600ms): تم تفعيله ✅');
+        } else {
+          // 🛡️ طبقة حماية خامسة: إعادة فحص HasFaceTemplate من السيرفر مباشرة
+          // لأن التسجيل ربما تم بنجاح في قاعدة البيانات ولكن Navigator لم يرجع القيمة!
+          if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] ⚠️ جميع الفحوصات السابقة فشلت → إعادة جلب HasFaceTemplate من السيرفر مباشرة (أمان نهائي)...');
+          try {
+            final recheck = await FaceApiService.getFaceStatus(
+              employee.clientID,
+              employee.employeeNumber,
+            ).timeout(const Duration(seconds: 10));
+            if (recheck['Success'] == true && recheck['HasFaceTemplate'] == true) {
+              enrolled = true;
+              if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] 🛡️🛡️🛡️ Fallback 3 (إعادة الفحص من السيرفر): HasFaceTemplate=TRUE → نجح التسجيل فعلاً في قاعدة البيانات ✅');
+            }
+          } catch (recheckErr) {
+            if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] فشل إعادة الفحص من السيرفر: $recheckErr');
+          }
+        }
+      }
+
+      if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] النتيجة النهائية enrolled=$enrolled');
+
+      if (!enrolled && mounted) {
+        try {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                Translations.getText('face_mgmt_login_enroll_required', lang),
+              ),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        } catch (snackErr) {
+          if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] فشل عرض SnackBar (مشكلة في Scaffold Context): $snackErr');
+        }
+      } else if (enrolled && kDebugMode) {
+        print('🔐 [LOGIN-FACE-T$tid] 🟢 تسجيل البصمة نجح! سيسمح للمستخدم بالدخول الآن.');
+      }
+
+      return enrolled;
+    } catch (e, stack) {
+      if (kDebugMode) {
+        print('🔐 [LOGIN-FACE-T$tid] ❌ استثناء عام في _ensureFaceEnrollmentIfNeeded: $e');
+        print('🔐 [LOGIN-FACE-T$tid] Stack: $stack');
+      }
+      return true; // حماية: سماح بالدخول دائماً عند خطأ برمجي (لا نحجز المستخدم)
     }
   }
 

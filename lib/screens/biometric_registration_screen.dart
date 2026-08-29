@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:provider/provider.dart';
 import '../models/biometric.dart';
 import '../services/biometric_api_service.dart';
 import '../services/biometric_service.dart';
+import '../services/language_service.dart';
+import '../services/translations.dart';
 import 'biometric_settings_screen.dart';
 
 class BiometricRegistrationScreen extends StatefulWidget {
@@ -29,6 +32,15 @@ class _BiometricRegistrationScreenState
   String? _successMessage;
   bool _hasBiometric = false;
   String? _debugInfo;
+
+  String _lang() => Provider.of<LanguageService>(context, listen: false)
+      .currentLocale
+      .languageCode;
+
+  String _t(String key) => Translations.getText(key, _lang());
+
+  String _tParams(String key, Map<String, String> params) =>
+      Translations.getTextWithParams(key, _lang(), params);
 
   void _log(String message) {
     if (kDebugMode) {
@@ -70,12 +82,13 @@ class _BiometricRegistrationScreenState
 
       if (response.hasBiometric) {
         setState(() {
-          _errorMessage = 'البصمة مسجلة مسبقاً لهذا الموظف';
+          _errorMessage = _t('biometric_already_registered');
         });
       }
     } catch (e) {
       setState(() {
-        _errorMessage = 'خطأ في التحقق من البصمة: $e';
+        _errorMessage =
+            _tParams('error_checking_biometric_with_error', {'error': e.toString()});
         _isProcessing = false;
       });
     }
@@ -102,8 +115,7 @@ class _BiometricRegistrationScreenState
 
       if (!canCheckBiometrics || availableBiometrics.isEmpty) {
         setState(() {
-          _errorMessage =
-              'الجهاز يدعم البصمة أو الوجه لكن لم يتم إعداد أي بصمة أو وجه في إعدادات الجهاز. يرجى إضافة بصمة أو وجه أولاً.';
+          _errorMessage = _t('device_biometric_not_setup');
           _isProcessing = false;
         });
         return;
@@ -111,7 +123,10 @@ class _BiometricRegistrationScreenState
 
       _log('🔐 بدء عملية تسجيل البصمة...');
       final biometricData = await BiometricService.registerFingerprint(
-        'تسجيل البصمة للموظف ${widget.employeeName ?? widget.employeeNumber}',
+        _tParams(
+          'register_fingerprint_for_employee',
+          {'employee': (widget.employeeName ?? widget.employeeNumber)},
+        ),
       );
 
       _log(
@@ -120,7 +135,7 @@ class _BiometricRegistrationScreenState
       if (biometricData == null) {
         _log('❌ فشل في الحصول على بيانات البصمة');
         setState(() {
-          _errorMessage = 'فشل في تسجيل البصمة. يرجى المحاولة مرة أخرى.';
+          _errorMessage = _t('fingerprint_registration_failed_try_again');
           _isProcessing = false;
         });
         return;
@@ -151,7 +166,7 @@ class _BiometricRegistrationScreenState
       if (response.success) {
         _log('✅ تم تسجيل البصمة بنجاح');
         setState(() {
-          _successMessage = 'تم تسجيل البصمة بنجاح';
+          _successMessage = _t('fingerprint_registered_success');
           _hasBiometric = true;
           _isProcessing = false;
         });
@@ -174,7 +189,8 @@ class _BiometricRegistrationScreenState
     } catch (e) {
       _log('💥 خطأ في تسجيل البصمة: $e');
       setState(() {
-        _errorMessage = 'خطأ في تسجيل البصمة: $e';
+        _errorMessage =
+            _tParams('error_registering_fingerprint_with_error', {'error': e.toString()});
         _isProcessing = false;
       });
     }
@@ -201,8 +217,7 @@ class _BiometricRegistrationScreenState
 
       if (!canCheckBiometrics || availableBiometrics.isEmpty) {
         setState(() {
-          _errorMessage =
-              'الجهاز يدعم البصمة أو الوجه لكن لم يتم إعداد أي بصمة أو وجه في إعدادات الجهاز. يرجى إضافة بصمة أو وجه أولاً.';
+          _errorMessage = _t('device_biometric_not_setup');
           _isProcessing = false;
         });
         return;
@@ -210,7 +225,10 @@ class _BiometricRegistrationScreenState
 
       _log('👤 بدء عملية تسجيل الوجه...');
       final biometricData = await BiometricService.registerFace(
-        'تسجيل الوجه للموظف ${widget.employeeName ?? widget.employeeNumber}',
+        _tParams(
+          'register_face_for_employee',
+          {'employee': (widget.employeeName ?? widget.employeeNumber)},
+        ),
       );
 
       _log(
@@ -219,7 +237,7 @@ class _BiometricRegistrationScreenState
       if (biometricData == null) {
         _log('❌ فشل في الحصول على بيانات الوجه');
         setState(() {
-          _errorMessage = 'فشل في تسجيل الوجه. يرجى المحاولة مرة أخرى.';
+          _errorMessage = _t('face_registration_failed_try_again');
           _isProcessing = false;
         });
         return;
@@ -250,7 +268,7 @@ class _BiometricRegistrationScreenState
       if (response.success) {
         _log('✅ تم تسجيل الوجه بنجاح');
         setState(() {
-          _successMessage = 'تم تسجيل الوجه بنجاح';
+          _successMessage = _t('face_registered_success');
           _hasBiometric = true;
           _isProcessing = false;
         });
@@ -273,7 +291,8 @@ class _BiometricRegistrationScreenState
     } catch (e) {
       _log('💥 خطأ في تسجيل الوجه: $e');
       setState(() {
-        _errorMessage = 'خطأ في تسجيل الوجه: $e';
+        _errorMessage =
+            _tParams('error_registering_face_with_error', {'error': e.toString()});
         _isProcessing = false;
       });
     }
@@ -294,7 +313,7 @@ class _BiometricRegistrationScreenState
 
       if (response.success) {
         setState(() {
-          _successMessage = 'تم حذف البصمة بنجاح';
+          _successMessage = _t('biometric_deleted_success');
           _hasBiometric = false;
           _isProcessing = false;
         });
@@ -315,7 +334,8 @@ class _BiometricRegistrationScreenState
       }
     } catch (e) {
       setState(() {
-        _errorMessage = 'خطأ في حذف البصمة: $e';
+        _errorMessage =
+            _tParams('error_deleting_biometric_with_error', {'error': e.toString()});
         _isProcessing = false;
       });
     }
@@ -323,9 +343,10 @@ class _BiometricRegistrationScreenState
 
   @override
   Widget build(BuildContext context) {
+    final lang = context.watch<LanguageService>().currentLocale.languageCode;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('تسجيل البصمة'),
+        title: Text(Translations.getText('biometric_registration', lang)),
         backgroundColor: const Color(0xFF0EA5E9),
         foregroundColor: Colors.white,
       ),
@@ -395,7 +416,7 @@ class _BiometricRegistrationScreenState
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'معلومات الموظف',
+                    Translations.getText('employee_info', lang),
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
@@ -404,13 +425,13 @@ class _BiometricRegistrationScreenState
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'رقم الموظف: ${widget.employeeNumber}',
+                    '${Translations.getText('employee_number_label', lang)}: ${widget.employeeNumber}',
                     style: const TextStyle(fontSize: 16),
                   ),
                   if (widget.employeeName != null) ...[
                     const SizedBox(height: 4),
                     Text(
-                      'اسم الموظف: ${widget.employeeName}',
+                      '${Translations.getText('employee_name', lang)}: ${widget.employeeName}',
                       style: const TextStyle(fontSize: 16),
                     ),
                   ],
@@ -425,7 +446,12 @@ class _BiometricRegistrationScreenState
                       borderRadius: BorderRadius.circular(4),
                     ),
                     child: Text(
-                      _hasBiometric ? 'البصمة مسجلة' : 'البصمة غير مسجلة',
+                      _hasBiometric
+                          ? Translations.getText('biometric_registered', lang)
+                          : Translations.getText(
+                              'biometric_not_registered',
+                              lang,
+                            ),
                       style: TextStyle(
                         color: _hasBiometric
                             ? Colors.green.shade700
@@ -448,17 +474,17 @@ class _BiometricRegistrationScreenState
                       color: const Color(0xFF0EA5E9),
                     ),
                     const SizedBox(height: 24),
-                    const Text(
-                      'تسجيل البصمة',
-                      style: TextStyle(
+                    Text(
+                      Translations.getText('biometric_registration', lang),
+                      style: const TextStyle(
                         fontSize: 24,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                     const SizedBox(height: 16),
-                    const Text(
-                      'اختر طريقة تسجيل البصمة',
-                      style: TextStyle(
+                    Text(
+                      Translations.getText('choose_biometric_method', lang),
+                      style: const TextStyle(
                         fontSize: 16,
                         color: Colors.grey,
                       ),
@@ -472,10 +498,12 @@ class _BiometricRegistrationScreenState
                           onPressed:
                               _isProcessing ? null : _registerFingerprint,
                           icon: const Icon(Icons.fingerprint),
-                          label: const Text(
-                            'تسجيل البصمة',
-                            style: TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.bold),
+                          label: Text(
+                            Translations.getText('register_fingerprint', lang),
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF0EA5E9),
@@ -493,10 +521,12 @@ class _BiometricRegistrationScreenState
                         child: ElevatedButton.icon(
                           onPressed: _isProcessing ? null : _registerFace,
                           icon: const Icon(Icons.face),
-                          label: const Text(
-                            'تسجيل الوجه',
-                            style: TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.bold),
+                          label: Text(
+                            Translations.getText('register_face', lang),
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.purple,
@@ -522,10 +552,12 @@ class _BiometricRegistrationScreenState
                             );
                           },
                           icon: const Icon(Icons.settings),
-                          label: const Text(
-                            'إعدادات البصمة',
-                            style: TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.bold),
+                          label: Text(
+                            Translations.getText('biometric_settings', lang),
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.orange,
@@ -543,10 +575,12 @@ class _BiometricRegistrationScreenState
                         child: ElevatedButton.icon(
                           onPressed: _isProcessing ? null : _deleteBiometric,
                           icon: const Icon(Icons.delete),
-                          label: const Text(
-                            'حذف البصمة',
-                            style: TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.bold),
+                          label: Text(
+                            Translations.getText('delete_biometric', lang),
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.red,
@@ -576,7 +610,7 @@ class _BiometricRegistrationScreenState
                   children: [
                     const CircularProgressIndicator(),
                     const SizedBox(width: 16),
-                    const Text('جاري المعالجة...'),
+                    Text(Translations.getText('processing', lang)),
                   ],
                 ),
               ),

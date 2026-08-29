@@ -8,7 +8,9 @@ class AppTheme {
   static const Color brandSuccess = Color(0xFF22C55E);
   static const Color brandWarning = Color(0xFFF59E0B);
   static const Color brandError = Color(0xFFEF4444);
-  static const Color brandBackground = Color(0xFFF5F7FB);
+  // static const Color brandBackground = Color(0xFFF5F7FB);
+  static const Color brandBackground = Color.fromARGB(255, 216, 225, 235);
+  // static const Color brandBackground = Color.fromARGB(255, 144, 195, 243);
 
   static ThemeData light() {
     final scheme = ColorScheme.fromSeed(

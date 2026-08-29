@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'services/notification_service.dart';
 import 'services/language_service.dart';
+import 'services/translations.dart';
 import 'config/api_config.dart';
 import 'theme/app_theme.dart';
 import 'models/api_models.dart' as api_models;
@@ -57,7 +58,10 @@ class MyApp extends StatelessWidget {
       child: Consumer<LanguageService>(
         builder: (context, languageService, child) {
           return MaterialApp(
-            title: 'Smart Vision',
+            title: Translations.getText(
+              'app_name',
+              languageService.currentLocale.languageCode,
+            ),
             debugShowCheckedModeBanner: false,
 
             // دعم اللغات المحلية

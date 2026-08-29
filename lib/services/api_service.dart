@@ -1286,11 +1286,21 @@ class ApiService {
         return data;
       } else {
         _log('❌ خطأ في جلب الطلبات المعلقة: ${response.statusCode}');
-        return {
-          'Success': false,
-          'Message': 'فشل في جلب الطلبات المعلقة: ${response.statusCode}',
-          'Data': [],
-        };
+        try {
+          final errorData = json.decode(response.body);
+          return {
+            'Success': false,
+            'Message': errorData['Message'] ??
+                'فشل في جلب الطلبات المعلقة: ${response.statusCode}',
+            'Data': const [],
+          };
+        } catch (_) {
+          return {
+            'Success': false,
+            'Message': 'فشل في جلب الطلبات المعلقة: ${response.statusCode}',
+            'Data': const [],
+          };
+        }
       }
     } catch (e) {
       _log('💥 خطأ في جلب الطلبات المعلقة: $e');

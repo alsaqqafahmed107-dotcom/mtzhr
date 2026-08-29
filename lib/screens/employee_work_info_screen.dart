@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:smart_vision/models/employee_full_info.dart';
 import 'package:smart_vision/models/shift.dart';
 import 'package:smart_vision/services/api_service.dart';
+import 'package:smart_vision/services/language_service.dart';
+import 'package:smart_vision/services/translations.dart';
 import 'package:smart_vision/utils/app_colors.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class EmployeeWorkInfoScreen extends StatefulWidget {
   final int clientId;
@@ -78,7 +80,7 @@ class _EmployeeWorkInfoScreenState extends State<EmployeeWorkInfoScreen> {
       print('💥 Error in _loadData: $e');
       if (mounted) {
         setState(() {
-          _error = 'حدث خطأ أثناء تحميل البيانات: $e';
+          _error = e.toString();
           _isLoading = false;
         });
       }
@@ -87,12 +89,19 @@ class _EmployeeWorkInfoScreenState extends State<EmployeeWorkInfoScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final languageService = context.watch<LanguageService>();
+    final lang = languageService.currentLocale.languageCode;
+
     return Scaffold(
       backgroundColor: Colors.grey[100],
       appBar: AppBar(
-        title: const Text('معلومات العمل',
-            style:
-                TextStyle(fontFamily: 'Tajawal', fontWeight: FontWeight.bold)),
+        title: Text(
+          Translations.getText('work_information', lang),
+          style: const TextStyle(
+            fontFamily: 'Tajawal',
+            fontWeight: FontWeight.bold,
+          ),
+        ),
         centerTitle: true,
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
@@ -110,8 +119,15 @@ class _EmployeeWorkInfoScreenState extends State<EmployeeWorkInfoScreen> {
           ? const Center(child: CircularProgressIndicator())
           : _error != null
               ? Center(
-                  child: Text(_error!,
-                      style: const TextStyle(fontFamily: 'Tajawal')))
+                  child: Text(
+                    Translations.getTextWithParams(
+                      'error_loading_data_with_error',
+                      lang,
+                      {'error': _error!},
+                    ),
+                    style: const TextStyle(fontFamily: 'Tajawal'),
+                  ),
+                )
               : SingleChildScrollView(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 16.0, vertical: 20.0),
@@ -129,13 +145,13 @@ class _EmployeeWorkInfoScreenState extends State<EmployeeWorkInfoScreen> {
                                   children: [
                                     _buildCurrentShiftCard(shift),
                                     const SizedBox(height: 20),
-                                    _buildWorkingDaysCard(shift),
+                                    _buildWorkingDaysCard(shift, lang),
                                     const SizedBox(height: 20),
                                   ],
                                 ))
                             .toList(),
                       ] else
-                        _buildEmptyShiftCard(),
+                        _buildEmptyShiftCard(lang),
 
                       const SizedBox(height: 30),
                     ],
@@ -228,6 +244,12 @@ class _EmployeeWorkInfoScreenState extends State<EmployeeWorkInfoScreen> {
 
   Widget _buildCurrentShiftCard(ShiftData shift) {
     final bool isAssignmentActive = shift.isActive;
+    final hireDateText = _employeeInfo?.hireDate.trim().isNotEmpty == true
+        ? _employeeInfo!.formatDate(_employeeInfo!.hireDate)
+        : '-';
+    final endDateText = _employeeInfo?.contractEndDate.trim().isNotEmpty == true
+        ? _employeeInfo!.formatDate(_employeeInfo!.contractEndDate)
+        : 'مستمر';
 
     return Container(
       decoration: BoxDecoration(
@@ -304,16 +326,15 @@ class _EmployeeWorkInfoScreenState extends State<EmployeeWorkInfoScreen> {
                     'اسم الوردية', shift.shiftName, Icons.label_outline),
                 _buildShiftDetailRow(
                     'وقت الوردية اليومي',
-                    shift.timeRange ??
-                        '${shift.startTimeLabel} - ${shift.endTimeLabel}',
+                    _formatShiftTime(shift),
                     Icons.schedule),
                 _buildShiftDetailRow(
                     'تاريخ بداية التعيين',
-                    shift.assignmentStartDate ?? '-',
+                    hireDateText,
                     Icons.calendar_today_outlined),
                 _buildShiftDetailRow(
                     'تاريخ نهاية التعيين',
-                    shift.assignmentEndDate ?? 'مستمر',
+                    endDateText,
                     Icons.event_busy_outlined),
                 _buildShiftDetailRow('مدة التعيين',
                     shift.assignmentDuration ?? '-', Icons.history),
@@ -426,7 +447,76 @@ class _EmployeeWorkInfoScreenState extends State<EmployeeWorkInfoScreen> {
     );
   }
 
-  Widget _buildWorkingDaysCard(ShiftData shift) {
+  Widget _buildWorkingDaysCard(ShiftData shift, String lang) {
+    String? weekdayKeyFrom(int dayNumber, String rawName) {
+      final normalized = rawName
+          .trim()
+          .toLowerCase()
+          .replaceAll('أ', 'ا')
+          .replaceAll('إ', 'ا')
+          .replaceAll('آ', 'ا')
+          .replaceAll('ى', 'ي')
+          .replaceAll('ة', 'ه')
+          .replaceAll(RegExp(r'\s+'), '');
+
+      final byName = <String, String>{
+        'الاحد': 'weekday_sunday',
+        'احد': 'weekday_sunday',
+        'الاثنين': 'weekday_monday',
+        'اثنين': 'weekday_monday',
+        'الثلاثاء': 'weekday_tuesday',
+        'الثلاثا': 'weekday_tuesday',
+        'ثلاثاء': 'weekday_tuesday',
+        'الاربعاء': 'weekday_wednesday',
+        'اربعاء': 'weekday_wednesday',
+        'الخميس': 'weekday_thursday',
+        'خميس': 'weekday_thursday',
+        'الجمعة': 'weekday_friday',
+        'جمعه': 'weekday_friday',
+        'السبت': 'weekday_saturday',
+        'سبت': 'weekday_saturday',
+        'sunday': 'weekday_sunday',
+        'sun': 'weekday_sunday',
+        'monday': 'weekday_monday',
+        'mon': 'weekday_monday',
+        'tuesday': 'weekday_tuesday',
+        'tue': 'weekday_tuesday',
+        'wednesday': 'weekday_wednesday',
+        'wed': 'weekday_wednesday',
+        'thursday': 'weekday_thursday',
+        'thu': 'weekday_thursday',
+        'friday': 'weekday_friday',
+        'fri': 'weekday_friday',
+        'saturday': 'weekday_saturday',
+        'sat': 'weekday_saturday',
+      };
+
+      if (byName.containsKey(normalized)) {
+        return byName[normalized];
+      }
+
+      if (dayNumber >= 1 && dayNumber <= 7) {
+        const byNumber = <int, String>{
+          1: 'weekday_sunday',
+          2: 'weekday_monday',
+          3: 'weekday_tuesday',
+          4: 'weekday_wednesday',
+          5: 'weekday_thursday',
+          6: 'weekday_friday',
+          7: 'weekday_saturday',
+        };
+        return byNumber[dayNumber];
+      }
+
+      return null;
+    }
+
+    String localizedDayName(ShiftWorkDay day) {
+      final key = weekdayKeyFrom(day.dayNumber, day.dayName);
+      if (key == null) return day.dayName;
+      return Translations.getText(key, lang);
+    }
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -442,15 +532,15 @@ class _EmployeeWorkInfoScreenState extends State<EmployeeWorkInfoScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Padding(
-            padding: EdgeInsets.all(20.0),
+          Padding(
+            padding: const EdgeInsets.all(20.0),
             child: Row(
               children: [
-                Icon(Icons.calendar_month, color: AppColors.success),
-                SizedBox(width: 12),
+                const Icon(Icons.calendar_month, color: AppColors.success),
+                const SizedBox(width: 12),
                 Text(
-                  'أيام العمل',
-                  style: TextStyle(
+                  Translations.getText('work_days', lang),
+                  style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
                     fontFamily: 'Tajawal',
@@ -460,7 +550,6 @@ class _EmployeeWorkInfoScreenState extends State<EmployeeWorkInfoScreen> {
             ),
           ),
           const Divider(height: 0),
-
           ListView.separated(
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
@@ -469,6 +558,7 @@ class _EmployeeWorkInfoScreenState extends State<EmployeeWorkInfoScreen> {
                 const Divider(height: 0, indent: 20, endIndent: 20),
             itemBuilder: (context, index) {
               final day = shift.workDays[index];
+              final dayName = localizedDayName(day);
               return Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
@@ -484,7 +574,7 @@ class _EmployeeWorkInfoScreenState extends State<EmployeeWorkInfoScreen> {
                       ),
                       child: Center(
                         child: Text(
-                          day.dayName.substring(0, 1),
+                          dayName.isEmpty ? '-' : dayName.substring(0, 1),
                           style: TextStyle(
                             color:
                                 day.isWorkDay ? AppColors.primary : Colors.grey,
@@ -497,7 +587,7 @@ class _EmployeeWorkInfoScreenState extends State<EmployeeWorkInfoScreen> {
                     ),
                     const SizedBox(width: 15),
                     Text(
-                      day.dayName,
+                      dayName,
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight:
@@ -508,16 +598,17 @@ class _EmployeeWorkInfoScreenState extends State<EmployeeWorkInfoScreen> {
                     ),
                     const Spacer(),
                     if (!day.isWorkDay)
-                      const Text(
-                        'إجازة',
-                        style: TextStyle(
-                            color: Colors.red,
-                            fontWeight: FontWeight.bold,
-                            fontFamily: 'Tajawal'),
+                      Text(
+                        Translations.getText('status_holiday', lang),
+                        style: const TextStyle(
+                          color: Colors.red,
+                          fontWeight: FontWeight.bold,
+                          fontFamily: 'Tajawal',
+                        ),
                       )
                     else
                       Text(
-                        day.displayRange,
+                        day.displayRange.isNotEmpty ? day.displayRange : '-',
                         style: const TextStyle(
                           fontWeight: FontWeight.w500,
                           color: AppColors.primary,
@@ -534,22 +625,45 @@ class _EmployeeWorkInfoScreenState extends State<EmployeeWorkInfoScreen> {
     );
   }
 
-  Widget _buildEmptyShiftCard() {
-    return const Card(
+  Widget _buildEmptyShiftCard(String lang) {
+    return Card(
       child: Padding(
-        padding: EdgeInsets.all(30.0),
+        padding: const EdgeInsets.all(30.0),
         child: Column(
           children: [
-            Icon(Icons.info_outline, size: 50, color: Colors.grey),
-            SizedBox(height: 15),
+            const Icon(Icons.info_outline, size: 50, color: Colors.grey),
+            const SizedBox(height: 15),
             Text(
-              'لا توجد معلومات وردية مسندة حالياً',
-              style: TextStyle(
-                  fontFamily: 'Tajawal', fontSize: 16, color: Colors.grey),
+              Translations.getText('no_shift_assigned', lang),
+              style: const TextStyle(
+                fontFamily: 'Tajawal',
+                fontSize: 16,
+                color: Colors.grey,
+              ),
             ),
           ],
         ),
       ),
     );
+  }
+
+  String _formatShiftTime(ShiftData shift) {
+    final timeRange = (shift.timeRange ?? '').trim();
+    if (timeRange.isNotEmpty) return timeRange;
+
+    final startLabel = (shift.startTimeLabel ?? '').trim();
+    final endLabel = (shift.endTimeLabel ?? '').trim();
+    if (startLabel.isNotEmpty && endLabel.isNotEmpty) {
+      return '$startLabel - $endLabel';
+    }
+
+    final start = shift.defaultStartTime.trim();
+    final end = shift.defaultEndTime.trim();
+    if (start.isNotEmpty && end.isNotEmpty) {
+      return '$start - $end';
+    }
+    if (start.isNotEmpty) return start;
+    if (end.isNotEmpty) return end;
+    return '-';
   }
 }

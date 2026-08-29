@@ -1,10 +1,25 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:provider/provider.dart';
 import '../services/face_api_service.dart';
+import '../services/language_service.dart';
+import '../services/translations.dart';
 
+// ============================================================================
+// 🔄 تمت إعادة الهيكلة بالكامل حسب متطلبات المستخدم:
+// ----------------------------------------------------------------------------
+// ✅ السلوك القديم: Enrollment = فحص الحياة + التحديات + تسجيل البصمة في Biometric
+// ✅ السلوك الجديد: Enrollment = التقاط صورة وجه بسيطة + حفظها في جدول Users_Employees
+//    (NO LIVENESS CHALLENGES - فقط تحقق وجود وجه + زوايا مناسبة + عيون مفتوحة)
+// 🎯 مكان فحص الحياة والهوية الآن: صفحة تسجيل الحضور والانصراف (FaceVerificationScreen)
+// ============================================================================
 class FaceEnrollmentScreen extends StatefulWidget {
   final String employeeNumber;
   final int clientId;
@@ -19,27 +34,277 @@ class FaceEnrollmentScreen extends StatefulWidget {
   State<FaceEnrollmentScreen> createState() => _FaceEnrollmentScreenState();
 }
 
-class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen> {
+class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
+    with WidgetsBindingObserver {
   CameraController? _controller;
   bool _isInitializing = true;
   bool _isProcessing = false;
-  String _statusMessage = 'يرجى توجيه وجهك نحو الكاميرا';
+  bool _isSavingToServer = false;
+  String _statusMessage = '';
+  String _instructionMessage = '';
+  String _poseHintMessage = '';
   Color _borderColor = Colors.white.withOpacity(0.5);
+  double _progressValue = 0.0; // النسبة المئوية لاستقرار وضع الوجه قبل التصوير التلقائي
+  bool _completedSuccessfully = false;
 
+  // ⚡ تتبع وقت بدء الجلسة لحساب المدة بشكل صحيح
+  final DateTime _sessionStartTime = DateTime.now();
+
+  // ⚡ نظام Pre-Capture JPG (الحل الجذري لمشكلة تنسيق الصورة):
+  // التقاط استباقي لصورة JPG صالحة كل 3 ثوانٍ أثناء مرحلة انتظار الوجه
+  Uint8List? _lastProactiveCapturedJpg;
+  Face? _lastProactiveCapturedFace;
+  Timer? _proactiveCaptureTimer;
+  bool _isProactiveCapturing = false;
+
+  // كاشف الوجه للكشف والتحقق من صحة الوضع
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
-      enableContours: true,
       enableClassification: true,
-      performanceMode: FaceDetectorMode.accurate,
+      enableTracking: true,
+      performanceMode: FaceDetectorMode.fast,
     ),
   );
+
+  Face? _previousTrackedFace;
+  Face? _currentDetectedFace;
+  bool _isFaceCurrentlyDetected = false;
+  int _frameCounter = 0;
+  static const int _processEveryNthFrame = 3;
+  bool _isStartingImageStream = false;
+  bool _streamPausedForStillCapture = false;
+
+  // حالة التثبيت قبل التصوير التلقائي:
+  Timer? _stabilizationTimer;
+  int _goodPoseFramesCount = 0;
+  static const int _requiredGoodFrames = 10; // ~10 إطارات جيدة متتالية قبل التصوير (تقريباً 1-2 ثانية)
+  bool _autoCaptureInProgress = false;
+
+  // تخزين آخر إطار وجه صالح للـ Fallback:
+  Uint8List? _lastValidFrameBytes;
+  Size? _lastValidFrameSize;
+  InputImageRotation? _lastValidFrameRotation;
+  Face? _lastValidFace;
+  bool _captureCompleted = false;
+
+  // معلومات جودة الوجه الحالية (للملاحظات في الـ UI):
+  double _currentHeadY = 0;
+  double _currentHeadX = 0;
+  double _currentLeftEyeOpen = 1.0;
+  double _currentRightEyeOpen = 1.0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    final lang =
+        Provider.of<LanguageService>(context, listen: false).currentLocale.languageCode;
+    _statusMessage = Translations.getText('face_point_to_camera', lang);
+    _instructionMessage = Translations.getText('face_enrollment_instruction_simple', lang)
+        ?? 'سيتم التقاط صورة لوجهك تلقائياً عندما يكون وضعك مناسباً. لا تحتاج لفعل أي حركات.';
+    _poseHintMessage = '';
     _initializeCamera();
+    _startProactiveCaptureLoop();
   }
 
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _stabilizationTimer?.cancel();
+    _proactiveCaptureTimer?.cancel();
+    _controller?.stopImageStream();
+    _controller?.dispose();
+    _faceDetector.close();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    unawaited(_handleAppLifecycleState(state));
+  }
+
+  Future<void> _handleAppLifecycleState(AppLifecycleState state) async {
+    if (!mounted) return;
+
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.detached) {
+      await _disposeCameraController(updateUi: mounted);
+      return;
+    }
+
+    if (state == AppLifecycleState.resumed &&
+        mounted &&
+        _controller == null &&
+        !_completedSuccessfully) {
+      await _initializeCamera();
+    }
+  }
+
+  CameraController _buildCameraController(
+    CameraDescription camera, {
+    required ResolutionPreset preset,
+    ImageFormatGroup? formatGroup,
+  }) {
+    return CameraController(
+      camera,
+      preset,
+      enableAudio: false,
+      imageFormatGroup: formatGroup,
+    );
+  }
+
+  Future<void> _configureCameraController(CameraController controller) async {
+    try {
+      await controller.setFlashMode(FlashMode.off);
+    } catch (_) {}
+    try {
+      await controller.setFocusMode(FocusMode.auto);
+    } catch (_) {}
+    try {
+      await controller.setExposureMode(ExposureMode.auto);
+    } catch (_) {}
+    try {
+      await controller.lockCaptureOrientation(DeviceOrientation.portraitUp);
+    } catch (_) {}
+  }
+
+  Future<void> _disposeCameraController({bool updateUi = false}) async {
+    final controller = _controller;
+    _controller = null;
+    if (controller != null) {
+      try {
+        if (controller.value.isStreamingImages) {
+          await controller.stopImageStream();
+        }
+      } catch (_) {}
+      try {
+        await controller.dispose();
+      } catch (_) {}
+    }
+    if (updateUi && mounted) {
+      setState(() {
+        _isInitializing = true;
+      });
+    }
+  }
+
+  // =========================================================
+  // 📸 نظام التقاط الاستباقي لصور JPG (Fallback)
+  // =========================================================
+  void _startProactiveCaptureLoop() {
+    _proactiveCaptureTimer = Timer.periodic(const Duration(milliseconds: 3000), (timer) async {
+      if (!mounted ||
+          _isInitializing ||
+          _isProcessing ||
+          _isSavingToServer ||
+          _isProactiveCapturing ||
+          _captureCompleted ||
+          _autoCaptureInProgress) {
+        return;
+      }
+      // نلتقط فقط عندما يكون هناك وجه في الإطار حالياً:
+      if (!_isFaceCurrentlyDetected) return;
+      try {
+        _isProactiveCapturing = true;
+        await _runProactiveCaptureOnce();
+      } catch (_) {
+      } finally {
+        if (mounted) _isProactiveCapturing = false;
+      }
+    });
+  }
+
+  Future<void> _runProactiveCaptureOnce() async {
+    if (_controller == null || !_controller!.value.isInitialized) return;
+    final XFile? img = await _tryTakePictureOrNull(timeoutMs: 2200);
+    if (img == null) return;
+    final bytes = await File(img.path).readAsBytes().timeout(const Duration(milliseconds: 1500));
+    final inputImage = InputImage.fromFilePath(img.path);
+    final faces = await _faceDetector.processImage(inputImage).timeout(const Duration(milliseconds: 2000));
+    if (faces.isNotEmpty) {
+      if (faces.length > 1) {
+        faces.sort((a, b) => (b.boundingBox.width * b.boundingBox.height)
+            .compareTo(a.boundingBox.width * a.boundingBox.height));
+      }
+      if (kDebugMode) {
+        print('📸 [Enroll-Proactive] ✅ تم التقاط صورة JPG احتياطية بحجم ${bytes.length ~/ 1024}KB');
+      }
+      _lastProactiveCapturedJpg = bytes;
+      _lastProactiveCapturedFace = faces.first;
+    }
+  }
+
+  Future<XFile?> _tryTakePictureOrNull({required int timeoutMs}) async {
+    try {
+      if (_controller == null || !_controller!.value.isInitialized) return null;
+      if (_controller!.value.isStreamingImages) {
+        await _controller!.stopImageStream();
+        _streamPausedForStillCapture = true;
+      }
+      return await _controller!.takePicture().timeout(Duration(milliseconds: timeoutMs));
+    } catch (_) {
+      return null;
+    } finally {
+      await _resumeImageStreamIfNeeded();
+    }
+  }
+
+  Future<void> _resumeImageStreamIfNeeded() async {
+    if (_controller == null || !_controller!.value.isInitialized) return;
+    if (_captureCompleted || _isSavingToServer) return;
+    if (_streamPausedForStillCapture && !_controller!.value.isStreamingImages) {
+      try {
+        await _startFrameStreaming();
+      } catch (_) {
+      } finally {
+        _streamPausedForStillCapture = false;
+      }
+    }
+  }
+
+  // =========================================================
+  // 🎯 دوال مساعدة للترجمات والتنقل
+  // =========================================================
+  String _lang() =>
+      Provider.of<LanguageService>(context, listen: false).currentLocale.languageCode;
+
+  String _t(String key) => Translations.getText(key, _lang());
+
+  String _tParams(String key, Map<String, String> params) =>
+      Translations.getTextWithParams(key, _lang(), params);
+
+  bool _isSuccessResult(dynamic result) {
+    if (result is! Map) return false;
+    if (result['Success'] == true) return true;
+    if (result['success'] == true) return true;
+    if (result['SUCCESS'] == true) return true;
+    final s = (result['Status'] ?? result['status'] ?? '').toString().toLowerCase();
+    if (s == 'ready' || s == 'success' || s == 'ok') return true;
+    if (result['Enrolled'] == true || result['Registered'] == true || result['Saved'] == true) return true;
+    return false;
+  }
+
+  void _smartClose() {
+    final bool result = _completedSuccessfully;
+    if (kDebugMode) {
+      print('🚪 [Enrollment-SmartClose] إغلاق مع النتيجة: $result');
+    }
+    try {
+      if (Navigator.of(context).canPop()) {
+        Navigator.of(context).pop(result);
+      } else {
+        SystemNavigator.pop();
+      }
+    } catch (e) {
+      if (kDebugMode) print('🚪 [Enrollment-SmartClose] استثناء: $e (الاعتماد على Global Flag).');
+    }
+  }
+
+  // =========================================================
+  // 🎥 تهيئة الكاميرا + معالجة الإطارات (بدون Liveness!)
+  // =========================================================
   Future<void> _initializeCamera() async {
     final cameras = await availableCameras();
     final frontCamera = cameras.firstWhere(
@@ -47,248 +312,874 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen> {
       orElse: () => cameras.first,
     );
 
-    _controller = CameraController(
-      frontCamera,
-      ResolutionPreset.high,
-      enableAudio: false,
-    );
-
     try {
-      await _controller!.initialize();
+      await _disposeCameraController();
+
+      final attempts = <({ResolutionPreset preset, ImageFormatGroup? format})>[
+        (
+          preset: Platform.isIOS ? ResolutionPreset.high : ResolutionPreset.medium,
+          format: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
+        ),
+        (
+          preset: ResolutionPreset.medium,
+          format: null,
+        ),
+        (
+          preset: ResolutionPreset.low,
+          format: null,
+        ),
+      ];
+
+      Object? lastError;
+      for (final attempt in attempts) {
+        CameraController? trialController;
+        try {
+          trialController = _buildCameraController(
+            frontCamera,
+            preset: attempt.preset,
+            formatGroup: attempt.format,
+          );
+          await trialController.initialize();
+          await _configureCameraController(trialController);
+          _controller = trialController;
+          trialController = null;
+          break;
+        } catch (e) {
+          lastError = e;
+          try {
+            await trialController?.dispose();
+          } catch (_) {}
+        }
+      }
+
+      if (_controller == null) {
+        throw lastError ?? Exception('تعذر تهيئة الكاميرا على هذا الجهاز.');
+      }
+
       if (mounted) {
         setState(() {
           _isInitializing = false;
         });
+        await _startFrameStreaming();
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _statusMessage = 'خطأ في تشغيل الكاميرا: $e';
+          _isInitializing = false;
+          _statusMessage = _tParams('camera_start_error_with_error', {'error': e.toString()});
           _borderColor = Colors.red;
         });
       }
     }
   }
 
-  Future<void> _captureAndEnroll() async {
+  Future<void> _startFrameStreaming() async {
+    if (_controller == null ||
+        !_controller!.value.isInitialized ||
+        _controller!.value.isStreamingImages ||
+        _isStartingImageStream) {
+      return;
+    }
+    _isStartingImageStream = true;
+    try {
+      await _controller!.startImageStream(_processCameraImage);
+    } finally {
+      _isStartingImageStream = false;
+    }
+  }
+
+  // 🔄 معالجة الإطار الواحد (بدون أي فحص Liveness - فقط كشف وجه + تحقق من الوضع)
+  Future<void> _processCameraImage(CameraImage image) async {
+    if (!mounted || _captureCompleted) return;
+
+    _frameCounter++;
+    if (_frameCounter % _processEveryNthFrame != 0) return;
+
+    try {
+      final BytesBuilder bytesBuilder = BytesBuilder(copy: false);
+      for (final Plane plane in image.planes) {
+        bytesBuilder.add(plane.bytes);
+      }
+      final Uint8List bytes = bytesBuilder.takeBytes();
+      final Size imageSize = Size(image.width.toDouble(), image.height.toDouble());
+      final camera = _controller!.description;
+      final imageRotation = InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
+          InputImageRotation.rotation0deg;
+      final inputImageFormat = InputImageFormatValue.fromRawValue(image.format.raw) ??
+          (Platform.isAndroid ? InputImageFormat.nv21 : InputImageFormat.bgra8888);
+      final int bytesPerRow = image.planes.isNotEmpty ? image.planes.first.bytesPerRow : 0;
+      final inputImageMetadata = InputImageMetadata(
+        size: imageSize, rotation: imageRotation, format: inputImageFormat, bytesPerRow: bytesPerRow,
+      );
+
+      final inputImage = InputImage.fromBytes(bytes: bytes, metadata: inputImageMetadata);
+      final faces = await _faceDetector.processImage(inputImage);
+
+      Face? currentFace;
+      if (faces.isNotEmpty) {
+        if (faces.length > 1) {
+          faces.sort((a, b) => (b.boundingBox.width * b.boundingBox.height)
+              .compareTo(a.boundingBox.width * a.boundingBox.height));
+        }
+        currentFace = faces.first;
+        _lastValidFrameBytes = bytes;
+        _lastValidFrameSize = imageSize;
+        _lastValidFrameRotation = imageRotation;
+        _lastValidFace = currentFace;
+      }
+
+      // تحديث الحالات:
+      final hadFaceBefore = _isFaceCurrentlyDetected;
+      _currentDetectedFace = currentFace;
+      _isFaceCurrentlyDetected = currentFace != null;
+      if (currentFace != null) {
+        _currentHeadY = currentFace.headEulerAngleY ?? 0;
+        _currentHeadX = currentFace.headEulerAngleX ?? 0;
+        _currentLeftEyeOpen = currentFace.leftEyeOpenProbability ?? 1.0;
+        _currentRightEyeOpen = currentFace.rightEyeOpenProbability ?? 1.0;
+      }
+
+      // ✅ تحقق من صحة وضع الوجه (الزوايا + العيون):
+      final bool isPoseValid = _validateFacePoseForEnrollment(currentFace);
+      if (kDebugMode && _frameCounter % 30 == 0) {
+        print('🎥 [Enroll-Frame] وجه=$_isFaceCurrentlyDetected | poseValid=$isPoseValid | X=${_currentHeadX.toStringAsFixed(1)}° Y=${_currentHeadY.toStringAsFixed(1)}° | L-eye=${_currentLeftEyeOpen.toStringAsFixed(2)}');
+      }
+
+      // 🎯 منطق التصوير التلقائي عند استقرار الوضع الجيد:
+      if (!_autoCaptureInProgress && !_isProcessing && !_isSavingToServer) {
+        if (_isFaceCurrentlyDetected && isPoseValid) {
+          _goodPoseFramesCount = (_goodPoseFramesCount + 1).clamp(0, _requiredGoodFrames * 2);
+          // بدء مؤقت التثبيت عند أول إطار جيد:
+          if (_stabilizationTimer == null || !_stabilizationTimer!.isActive) {
+            _stabilizationTimer = Timer(const Duration(milliseconds: 1200), () {
+              if (!mounted || _autoCaptureInProgress) return;
+              if (_goodPoseFramesCount >= _requiredGoodFrames ~/ 2) {
+                if (kDebugMode) print('🎯 [Auto-Capture] تم استقرار الوضع → بدء التصوير التلقائي!');
+                _manualOrAutoCapture();
+              }
+            });
+          }
+        } else {
+          _goodPoseFramesCount = 0;
+          _stabilizationTimer?.cancel();
+          _stabilizationTimer = null;
+        }
+      }
+
+      // تحديث الواجهة (رسائل التلميح + اللون + النسبة):
+      _updatePoseFeedback(currentFace, isPoseValid, hadFaceBefore);
+
+      _previousTrackedFace = currentFace;
+    } catch (e) {
+      // تجاهل أخطاء معالجة الإطارات الفردية
+    }
+  }
+
+  // =========================================================
+  // ✅ تحقق من صحة وضع الوجه قبل التسجيل (بدون Liveness)
+  // =========================================================
+  bool _validateFacePoseForEnrollment(Face? face) {
+    if (face == null) return false;
+    final double headY = face.headEulerAngleY ?? 0;
+    final double headX = face.headEulerAngleX ?? 0;
+    if (headY.abs() > 25 || headX.abs() > 25) return false;
+    final double leftEye = face.leftEyeOpenProbability ?? 1.0;
+    final double rightEye = face.rightEyeOpenProbability ?? 1.0;
+    if (leftEye < 0.2 || rightEye < 0.2) return false;
+    final double w = face.boundingBox.width;
+    final double h = face.boundingBox.height;
+    if (w < 100 || h < 120) return false;
+    return true;
+  }
+
+  // =========================================================
+  // 💬 تحديث ملاحظات الوضع في الواجهة (للمستخدم)
+  // =========================================================
+  void _updatePoseFeedback(Face? face, bool isPoseValid, bool hadFaceBefore) {
+    if (!mounted) return;
+    String newHint = '';
+    Color newBorder = _borderColor;
+    double newProgress = _progressValue;
+
+    if (face == null) {
+      newHint = '🧐 قم بتوجيه وجهك نحو الكاميرا مباشرة...';
+      newBorder = Colors.blue.withOpacity(0.6);
+      newProgress = 0.0;
+    } else {
+      if (_currentHeadY.abs() > 25) {
+        newHint = '↔️ انظر مباشرة إلى الأمام (لا تنظر لليمين أو لليسار)';
+        newBorder = Colors.orange;
+      } else if (_currentHeadX.abs() > 25) {
+        newHint = '↕️ انظر مباشرة إلى الأمام (لا تنظر للأعلى أو للأسفل)';
+        newBorder = Colors.orange;
+      } else if (_currentLeftEyeOpen < 0.3 || _currentRightEyeOpen < 0.3) {
+        newHint = '👀 افتح عينيك بوضوح أثناء التقاط الصورة';
+        newBorder = Colors.orange;
+      } else if (!isPoseValid) {
+        newHint = '📏 تقرب من الكاميرا قليلاً (الوجه صغير جداً في الإطار)';
+        newBorder = Colors.orange;
+      } else {
+        newHint = '✅ ممتاز! ابقى ثابتاً للحظة...';
+        newBorder = Colors.green;
+        newProgress = (_goodPoseFramesCount / _requiredGoodFrames).clamp(0.0, 1.0);
+      }
+    }
+
+    if (newHint != _poseHintMessage || newBorder != _borderColor || newProgress != _progressValue) {
+      setState(() {
+        _poseHintMessage = newHint;
+        _borderColor = newBorder;
+        _progressValue = newProgress;
+      });
+    }
+  }
+
+  // =========================================================
+  // 📸 الدالة الرئيسية: التقاط الصورة + حفظها في Users_Employees
+  // =========================================================
+  Future<void> _manualOrAutoCapture() async {
+    if (_autoCaptureInProgress || _isProcessing || _isSavingToServer) return;
+    _autoCaptureInProgress = true;
+    _stabilizationTimer?.cancel();
+    _stabilizationTimer = null;
+    await _captureAndSaveEmployeeFace();
+    if (mounted) _autoCaptureInProgress = false;
+  }
+
+  Future<void> _captureAndSaveEmployeeFace() async {
     if (_isProcessing ||
+        _isSavingToServer ||
         _controller == null ||
         !_controller!.value.isInitialized) return;
 
+    final perfTrace = DateTime.now();
+    String tid = 'T${perfTrace.millisecondsSinceEpoch.toRadixString(36)}';
+    String phase = 'START';
+    int saveAttempt = 0;
+    if (kDebugMode) {
+      print('💾 [ENROLL-SAVE-$tid] ════════════════════════════════════');
+      print('💾 [ENROLL-SAVE-$tid] بدء حفظ صورة الوجه في جدول Users_Employees | Emp=${widget.employeeNumber}');
+      print('💾 [ENROLL-SAVE-$tid] ════════════════════════════════════');
+    }
+
     setState(() {
+      _isSavingToServer = true;
       _isProcessing = true;
-      _statusMessage = 'جاري تحليل ملامح الوجه...';
-      _borderColor = Colors.orange;
+      _statusMessage = 'جاري التقاط الصورة وحفظها...';
     });
 
+    Uint8List? finalImageBytes;
+    Face? finalFace;
+    String? failReason;
+
     try {
-      final image = await _controller!.takePicture();
-      final inputImage = InputImage.fromFilePath(image.path);
+      // ----------------------------------------------------
+      // المرحلة 1: التقاط الصورة (3 طبقات احتياطية)
+      // ----------------------------------------------------
+      phase = 'CAPTURE_IMAGE';
+      String fallbackUsed = 'NONE';
+      try {
+        final swCap = Stopwatch()..start();
+        if (_controller!.value.isStreamingImages) {
+          await _controller!.stopImageStream();
+          _streamPausedForStillCapture = true;
+        }
+        final XFile rawImage = await _controller!.takePicture().timeout(
+          const Duration(seconds: 8),
+          onTimeout: () {
+            failReason = 'TIMEOUT_TAKEPICTURE_8S';
+            throw TimeoutException('مهلة التقاط الصورة انتهت → استخدام آخر صورة JPG محفوظة.');
+          },
+        );
+        final bytesXFile = await File(rawImage.path).readAsBytes().timeout(const Duration(seconds: 4));
+        final inputImage = InputImage.fromFilePath(rawImage.path);
+        final faces = await _faceDetector.processImage(inputImage).timeout(const Duration(seconds: 6));
+        final t2 = swCap.elapsedMilliseconds;
 
-      final faces = await _faceDetector.processImage(inputImage);
-
-      if (faces.isEmpty) {
-        setState(() {
-          _statusMessage = 'لم يتم اكتشاف وجه. حاول الاقتراب من الكاميرا.';
-          _isProcessing = false;
-          _borderColor = Colors.red;
-        });
-        return;
+        if (faces.isNotEmpty) {
+          if (faces.length > 1) {
+            faces.sort((a, b) => (b.boundingBox.width * b.boundingBox.height)
+                .compareTo(a.boundingBox.width * a.boundingBox.height));
+          }
+          finalImageBytes = bytesXFile;
+          finalFace = faces.first;
+          fallbackUsed = 'DIRECT';
+          if (kDebugMode) print('💾 [$tid] (${t2}ms) PHASE 1A OK: takePicture() مباشر');
+        } else {
+          failReason = 'NO_FACE_IN_CAPTURED';
+          throw Exception('لا يوجد وجه → Fallback JPG.');
+        }
+      } catch (capErr) {
+        if (kDebugMode) print('💾 [$tid] ⚠️ المرحلة 1A فشلت: $capErr');
+        if (_lastProactiveCapturedJpg != null && _lastProactiveCapturedFace != null) {
+          finalImageBytes = _lastProactiveCapturedJpg!;
+          finalFace = _lastProactiveCapturedFace!;
+          fallbackUsed = 'PROACTIVE_JPG';
+          if (kDebugMode) print('💾 [$tid] PHASE 1B OK: Fallback → JPG استباقي (${finalImageBytes!.length ~/ 1024}KB)');
+        } else if (_lastValidFrameBytes != null && _lastValidFace != null) {
+          finalImageBytes = _lastValidFrameBytes!;
+          finalFace = _lastValidFace!;
+          fallbackUsed = 'RAW_FRAME_LAST_RESORT';
+          if (kDebugMode) print('💾 [$tid] PHASE 1C ⚠️ Fallback → RAW NV21 (خطة أخيرة!)');
+        } else {
+          rethrow;
+        }
+      }
+      if (finalImageBytes == null || finalFace == null) {
+        throw Exception('فشل الحصول على صورة وجه صالحة.');
       }
 
-      Face face = faces.first;
-      if (faces.length > 1) {
-        faces.sort((a, b) => (b.boundingBox.width * b.boundingBox.height)
-            .compareTo(a.boundingBox.width * a.boundingBox.height));
-        face = faces.first;
+      // ----------------------------------------------------
+      // المرحلة 2: فحص زوايا الرأس والعيون (التحقق النهائي)
+      // ----------------------------------------------------
+      phase = 'VALIDATE_POSE';
+      double headY = finalFace!.headEulerAngleY ?? 0;
+      double headX = finalFace!.headEulerAngleX ?? 0;
+      if (headY.abs() > 25 || headX.abs() > 25) {
+        throw StateError(_t('look_straight_no_tilt'));
+      }
+      if ((finalFace!.leftEyeOpenProbability ?? 1.0) < 0.2) {
+        throw StateError(_t('open_eyes_clearly_for_photo'));
+      }
+      final t2 = DateTime.now().difference(perfTrace).inMilliseconds;
+      if (kDebugMode) {
+        print('💾 [$tid] (${t2}ms) PHASE 2 OK: زاوية صالحة Y=${headY.toStringAsFixed(1)}° X=${headX.toStringAsFixed(1)}°');
       }
 
-      double headY = face.headEulerAngleY ?? 0;
-      double headX = face.headEulerAngleX ?? 0;
-      if (headY.abs() > 20 || headX.abs() > 20) {
-        setState(() {
-          _statusMessage = 'يرجى النظر مباشرة للكاميرا دون ميلان.';
-          _isProcessing = false;
-          _borderColor = Colors.red;
-        });
-        return;
+      // ----------------------------------------------------
+      // المرحلة 3: Base64 + Metadata (GDPR + خصوصية الصور)
+      // ----------------------------------------------------
+      phase = 'BASE64_ENCODE';
+      final base64Image = base64Encode(finalImageBytes!);
+      final metadata = {
+        // نبقي الـ DeviceInfo صغيراً جداً لأن بعض إصدارات الـ API القديمة
+        // كانت تحفظه في عمود محدود الحجم وتفشل برسالة:
+        // "String or binary data would be truncated".
+        'captureTimestamp': DateTime.now().toIso8601String(),
+        'imageSource': fallbackUsed,
+        'consentApproved': true,
+        'retentionYears': 5,
+        'flowVersion': 'ENROLL_V1',
+      };
+      final t3 = DateTime.now().difference(perfTrace).inMilliseconds;
+      if (kDebugMode) {
+        print('💾 [$tid] (${t3}ms) PHASE 3 OK: Base64 (${base64Image.length ~/ 1024}KB) + Metadata');
       }
 
-      if (face.leftEyeOpenProbability != null &&
-          face.leftEyeOpenProbability! < 0.2) {
-        setState(() {
-          _statusMessage = 'يرجى التأكد من فتح عينيك جيداً للصورة.';
-          _isProcessing = false;
-          _borderColor = Colors.red;
-        });
-        return;
+      // ----------------------------------------------------
+      // المرحلة 4: إرسال الحفظ إلى السيرفر (3 محاولات ذكية)
+      // ----------------------------------------------------
+      phase = 'SAVE_API_SEND';
+      const maxAttempts = 3;
+      Map<String, dynamic>? finalResult;
+      String? lastApiErr;
+
+      for (saveAttempt = 1; saveAttempt <= maxAttempts; saveAttempt++) {
+        try {
+          if (kDebugMode) print('💾 [$tid] 🔄 محاولة $saveAttempt/$maxAttempts...');
+          final sw = Stopwatch()..start();
+          // 🆕 استخدام الدالة الجديدة: saveEmployeeFaceImage → Users_Employees (NO LIVENESS)
+          final r = await FaceApiService.saveEmployeeFaceImage(
+            clientId: widget.clientId,
+            employeeNumber: widget.employeeNumber,
+            imageBase64: base64Image,
+            deviceInfo: jsonEncode(metadata),
+          ).timeout(const Duration(seconds: 15));
+          final t4 = sw.elapsedMilliseconds;
+          finalResult = r;
+          if (_isSuccessResult(r)) {
+            if (kDebugMode) print('💾 [$tid] (${t4}ms) PHASE 4 OK: تم الحفظ بنجاح (محاولة $saveAttempt)');
+            lastApiErr = null;
+            break;
+          } else {
+            lastApiErr = r['Message'] ?? 'فشل الحفظ غير معروف';
+            if (kDebugMode) print('💾 [$tid] ⚠️ رفض السيرفر: $lastApiErr');
+            // إيقاف Retry عند الأخطاء المنطقية (الشبكية فقط نعيدها):
+            final errLower = lastApiErr!.toLowerCase();
+            final stopKeywords = [
+              'غير موجود', 'غير مفعل', 'الموظف', 'not found',
+              'مسجلة مسبقاً', 'already saved', 'duplicate',
+              'غير مصرح', 'unauthorized', 'permission',
+              'القاعدة', 'database', 'invalid', 'constraint',
+              'جودة منخفضة', 'quality', 'no face', 'no face detected',
+              'غير واضح', 'blurry',
+            ];
+            final shouldStop = stopKeywords.any((k) =>
+                lastApiErr!.contains(k) || errLower.contains(k.toLowerCase()));
+            if (shouldStop) {
+              if (kDebugMode) print('💾 [$tid] 🛑 توقف Retry (خطأ منطقي): $lastApiErr');
+              break;
+            }
+          }
+        } catch (apiErr) {
+          lastApiErr = apiErr.toString();
+          if (kDebugMode) print('💾 [$tid] ❌ استثناء: $lastApiErr');
+        }
+        if (saveAttempt < maxAttempts) {
+          await Future.delayed(Duration(milliseconds: 600 * saveAttempt));
+        }
       }
 
-      setState(() {
-        _borderColor = Colors.green;
-        _statusMessage = '✅ تم التعرف على الوجه. جاري الحفظ...';
-      });
+      // ----------------------------------------------------
+      // المرحلة 5: النهائية (نجاح أو فشل)
+      // ----------------------------------------------------
+      phase = 'FINALIZE';
+      _captureCompleted = true;
 
-      final bytes = await File(image.path).readAsBytes();
-      final base64Image = base64Encode(bytes);
-
-      final result = await FaceApiService.enrollFace(
-        clientId: widget.clientId,
-        employeeNumber: widget.employeeNumber,
-        imageBase64: base64Image,
-      );
-
-      if (result['Success'] == true) {
+      if (finalResult != null && _isSuccessResult(finalResult)) {
+        FaceApiService.markLastFaceSessionSuccessful(
+          employeeNumber: widget.employeeNumber,
+          sessionKind: 'enrollment',
+        );
+        _completedSuccessfully = true;
+        final totalMs = DateTime.now().difference(perfTrace).inMilliseconds;
+        final bool updatedExisting =
+            finalResult!['UpdatedExisting'] == true || finalResult!['Updated'] == true;
+        if (kDebugMode) {
+          print('✅ [ENROLL-SAVE-SUCCESS-$tid] ═══════════════');
+          print('✅  الإجمالي: ${totalMs}ms | المحاولات: $saveAttempt');
+          print('✅  رسالة: ${finalResult!['Message'] ?? "---"}');
+          print('✅  UpdatedExisting: $updatedExisting');
+          print('✅ [ENROLL-SAVE-SUCCESS-$tid] ═══════════════');
+        }
         if (mounted) {
           setState(() {
-            _statusMessage = '✅ تم تسجيل الوجه بنجاح';
+            _borderColor = Colors.green;
+            _statusMessage = updatedExisting
+                ? 'تم تحديث صورة الوجه بنجاح في ملفك الشخصي...'
+                : 'تم حفظ صورة الوجه بنجاح! سيتم تحويلك الآن.';
+            _poseHintMessage = '';
+            _progressValue = 1.0;
+            _isProcessing = false;
+            _isSavingToServer = false;
           });
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('✅ تم تسجيل الوجه بنجاح'),
-              backgroundColor: Colors.green,
-            ),
-          );
-          await Future.delayed(const Duration(seconds: 1));
-          if (mounted) {
-            Navigator.pop(context, true);
-          }
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            Future.delayed(const Duration(milliseconds: 1200), () {
+              if (mounted) _smartClose();
+            });
+          });
         }
       } else {
-        setState(() {
-          _statusMessage = result['Message'] ?? 'فشل التسجيل';
-          _isProcessing = false;
-          _borderColor = Colors.red;
-        });
+        var msg = lastApiErr ?? 'فشل حفظ صورة الوجه.';
+        var shouldAutoReset = true;
+        // 🛡️ تحويل أخطاء الـ HTTP الخام إلى رسائل مفهومة للمستخدم النهائي:
+        final msgLower = msg.toLowerCase();
+        if (msgLower.contains('string or binary data would be truncated') ||
+            msgLower.contains('binary or string data would be truncated') ||
+            msgLower.contains('truncated')) {
+          msg =
+              'فشل الحفظ لأن الخادم اعتبر البيانات المرسلة أكبر من سعة الحقل في قاعدة البيانات. '
+              'غالباً المشكلة من الخادم أو من نسخة API قديمة، وليست من وجهك أو الكاميرا.';
+          shouldAutoReset = false;
+        } else if (msgLower.contains('database') || msgLower.contains('sql')) {
+          msg =
+              'فشل الحفظ بسبب مشكلة في قاعدة البيانات على الخادم. الرسالة ستبقى ظاهرة حتى تتمكن من قراءتها ثم اضغط إعادة المحاولة.';
+          shouldAutoReset = false;
+        }
+        if (msg.contains('404') || msgLower.contains('not found')) {
+          msg = 'تعذر الوصول إلى خدمة الحفظ مؤقتاً. يتم الآن استخدام خدمة بديلة... يرجى المحاولة مرة أخرى إذا استمرت المشكلة.';
+        } else if (msg.contains('500') || msgLower.contains('server error') || msgLower.contains('internal server')) {
+          msg = 'يوجد خطأ في سيرفر قاعدة البيانات حالياً. يرجى المحاولة بعد بضع دقائق أو التواصل مع الدعم الفني.';
+        } else if (msgLower.contains('timeout') || msg.contains('مهلة') || msgLower.contains('timed out')) {
+          msg = 'الاستجابة بطيئة جداً من السيرفر. تأكد من قوة الإنترنت ثم أعد المحاولة.';
+        } else if (msgLower.contains('connection') || msgLower.contains('socket') || msgLower.contains('network')) {
+          msg = 'تعذر الاتصال بالسيرفر. تأكد من اتصالك بالإنترنت ثم أعد المحاولة.';
+        }
+        if (kDebugMode) print('❌❌❌ [ENROLL-SAVE-$tid] فشل نهائي. السبب: $msg');
+        if (mounted) {
+          setState(() {
+            _statusMessage = msg;
+            _isProcessing = false;
+            _isSavingToServer = false;
+            _poseHintMessage = shouldAutoReset
+                ? ''
+                : 'يمكنك قراءة الرسالة ثم الضغط على "إعادة المحاولة".';
+            _borderColor = Colors.red;
+          });
+          if (shouldAutoReset) {
+            Future.delayed(const Duration(seconds: 6), () {
+              if (mounted) _resetAndStartOver();
+            });
+          }
+        }
       }
-    } catch (e) {
+    } catch (e, stack) {
+      if (kDebugMode) {
+        final ms = DateTime.now().difference(perfTrace).inMilliseconds;
+        print('❌❌❌ [ENROLL-SAVE-$tid] استثناء فادح (${ms}ms) | المرحلة: $phase');
+        print('❌❌❌ الخطأ: $e');
+        print('❌❌❌ Stack: $stack');
+      }
       if (mounted) {
+        final rawErr = e.toString();
+        final errLower = rawErr.toLowerCase();
+        String friendlyMsg;
+        var shouldAutoReset = true;
+        if (rawErr.contains('404') || errLower.contains('not found')) {
+          friendlyMsg = 'خدمة الحفظ غير متاحة حالياً، تم التبديل إلى الخدمة البديلة. يرجى المحاولة مرة أخرى.';
+        } else if (rawErr.contains('500') || errLower.contains('server error')) {
+          friendlyMsg = 'خطأ في سيرفر قاعدة البيانات. يرجى المحاولة لاحقاً.';
+        } else if (errLower.contains('timeout') || errLower.contains('timed out')) {
+          friendlyMsg = 'الاستجابة بطيئة جداً. تأكد من الإنترنت ثم أعد المحاولة.';
+        } else if (errLower.contains('connection') || errLower.contains('socket') || errLower.contains('network')) {
+          friendlyMsg = 'تعذر الاتصال بالسيرفر. تحقق من اتصال الإنترنت.';
+        } else if (errLower.contains('string or binary data would be truncated') ||
+            errLower.contains('binary or string data would be truncated') ||
+            errLower.contains('truncated')) {
+          friendlyMsg =
+              'الخادم رفض الحفظ لأن حجم البيانات النصية المرسلة أكبر من سعة الحقل في قاعدة البيانات. '
+              'هذا خطأ من جهة الـ API أو قاعدة البيانات، وليس من طريقة وقوفك أمام الكاميرا.';
+          shouldAutoReset = false;
+        } else {
+          friendlyMsg = _tParams('error_with_error', {'error': rawErr});
+        }
         setState(() {
-          _statusMessage = 'حدث خطأ: $e';
+          _statusMessage = friendlyMsg;
           _isProcessing = false;
+          _isSavingToServer = false;
+          _poseHintMessage = shouldAutoReset
+              ? ''
+              : 'بعد قراءة الرسالة اضغط "إعادة المحاولة".';
           _borderColor = Colors.red;
         });
+        if (shouldAutoReset) {
+          Future.delayed(const Duration(seconds: 6), () {
+            if (mounted) _resetAndStartOver();
+          });
+        }
       }
+    } finally {
+      await _resumeImageStreamIfNeeded();
     }
   }
 
-  @override
-  void dispose() {
-    _controller?.dispose();
-    _faceDetector.close();
-    super.dispose();
+  // =========================================================
+  // 🔁 إعادة البدء (زر Retry)
+  // =========================================================
+  void _resetAndStartOver() {
+    if (!mounted) return;
+    _stabilizationTimer?.cancel();
+    _stabilizationTimer = null;
+    setState(() {
+      _isProcessing = false;
+      _isSavingToServer = false;
+      _autoCaptureInProgress = false;
+      _progressValue = 0.0;
+      _goodPoseFramesCount = 0;
+      _previousTrackedFace = null;
+      _currentDetectedFace = null;
+      _isFaceCurrentlyDetected = false;
+      _frameCounter = 0;
+      _captureCompleted = false;
+      final lang = _lang();
+      _statusMessage = Translations.getText('face_point_to_camera', lang);
+      _poseHintMessage = '';
+      _borderColor = Colors.blue.withOpacity(0.6);
+    });
   }
 
+  // =========================================================
+  // 🎨 واجهة المستخدم الجديدة (مبسطة - بدون تحديات!)
+  // =========================================================
   @override
   Widget build(BuildContext context) {
     if (_isInitializing) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('تسجيل الوجه'),
-        backgroundColor: Colors.blue,
-        foregroundColor: Colors.white,
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                Positioned.fill(
-                  child: ClipRect(
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final controller = _controller!;
-                        final previewSize = controller.value.previewSize;
-                        final screenAspect =
-                            constraints.maxWidth / constraints.maxHeight;
-                        final cameraAspect = previewSize == null
-                            ? controller.value.aspectRatio
-                            : previewSize.height / previewSize.width;
-
-                        double scale = cameraAspect / screenAspect;
-                        if (scale < 1) scale = 1 / scale;
-
-                        return Transform.scale(
-                          scale: scale,
-                          child: Center(child: CameraPreview(controller)),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 300),
-                  width: 280,
-                  height: 380,
-                  decoration: BoxDecoration(
-                    border: Border.all(color: _borderColor, width: 4),
-                    borderRadius: BorderRadius.circular(150),
-                    boxShadow: [
-                      BoxShadow(
-                        color: _borderColor.withOpacity(0.2),
-                        blurRadius: 15,
-                        spreadRadius: 2,
+    return PopScope<Object?>(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _smartClose();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_t('face_enrollment')),
+          backgroundColor: Colors.blue,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: _smartClose,
+          ),
+        ),
+        body: Column(
+          children: [
+            Expanded(
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Positioned.fill(
+                    child: ClipRect(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final controller = _controller!;
+                          final previewSize = controller.value.previewSize;
+                          final screenAspect =
+                              constraints.maxWidth / constraints.maxHeight;
+                          final cameraAspect = previewSize == null
+                              ? controller.value.aspectRatio
+                              : previewSize.height / previewSize.width;
+                          double scale = cameraAspect / screenAspect;
+                          if (scale < 1) scale = 1 / scale;
+                          return Transform.scale(
+                            scale: scale,
+                            child: Center(child: CameraPreview(controller)),
+                          );
+                        },
                       ),
-                    ],
-                  ),
-                ),
-                if (_isProcessing)
-                  Container(
-                    color: Colors.black26,
-                    child: const Center(
-                      child: CircularProgressIndicator(color: Colors.white),
                     ),
                   ),
-              ],
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.all(24),
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  _statusMessage,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: _statusMessage.contains('خطأ')
-                        ? Colors.red
-                        : Colors.blue.shade800,
-                  ),
-                ),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  height: 56,
-                  child: ElevatedButton.icon(
-                    onPressed: _isProcessing ? null : _captureAndEnroll,
-                    icon: const Icon(Icons.camera_alt),
-                    label: const Text('التقاط وتسجيل',
-                        style: TextStyle(fontSize: 18)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16)),
+                  // ✅ البطاقة العلوية (العنوان المبسط):
+                  Positioned(
+                    top: 16,
+                    left: 0, right: 0,
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: const Text(
+                          '📸 تسجيل صورة الوجه',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              ],
+                  // ✅ بطاقة ملاحظات الوضع (الموجهة للمستخدم بدلاً من التحديات):
+                  if (_poseHintMessage.isNotEmpty)
+                    Positioned(
+                      top: 64,
+                      left: 12, right: 12,
+                      child: Center(
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 300),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 20, vertical: 12),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [
+                                _borderColor.withOpacity(0.95),
+                                _borderColor.withOpacity(0.7),
+                              ],
+                            ),
+                            borderRadius: BorderRadius.circular(18),
+                            boxShadow: [
+                              BoxShadow(
+                                color: _borderColor.withOpacity(0.35),
+                                blurRadius: 16, spreadRadius: 2,
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              AnimatedContainer(
+                                duration: const Duration(milliseconds: 500),
+                                width: 10, height: 10,
+                                decoration: const BoxDecoration(
+                                  color: Colors.white, shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Flexible(
+                                child: Text(
+                                  _poseHintMessage,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  // الإطار الملون + شريط التقدم (الاستقرار):
+                  Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 300),
+                          width: 270,
+                          height: 360,
+                          decoration: BoxDecoration(
+                            border: Border.all(color: _borderColor, width: 5),
+                            borderRadius: BorderRadius.circular(140),
+                            boxShadow: [
+                              BoxShadow(
+                                color: _borderColor.withOpacity(0.25),
+                                blurRadius: 20, spreadRadius: 3,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        SizedBox(
+                          width: 270,
+                          child: Column(
+                            children: [
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(10),
+                                child: LinearProgressIndicator(
+                                  value: _progressValue,
+                                  minHeight: 8,
+                                  backgroundColor: Colors.white24,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    _borderColor,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                _isFaceCurrentlyDetected
+                                    ? 'استقرار الوجه: ${(_progressValue * 100).toInt()}%'
+                                    : 'في انتظار اكتشاف الوجه...',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.white.withOpacity(0.9),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // شاشة الانتظار (الـ Loading):
+                  if (_isProcessing || _isSavingToServer)
+                    Container(
+                      color: Colors.black26,
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const CircularProgressIndicator(color: Colors.white),
+                            const SizedBox(height: 16),
+                            Text(
+                              _statusMessage,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
-          ),
-        ],
+            // ✅ البطاقة السفلية (الأزرار + التعليمات):
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black12,
+                    blurRadius: 20, spreadRadius: 2,
+                    offset: Offset(0, -5),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _statusMessage,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                      color: _borderColor == Colors.red ||
+                              _borderColor == Colors.redAccent
+                          ? Colors.red
+                          : Colors.blue.shade800,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  if (_instructionMessage.isNotEmpty &&
+                      !_isProcessing &&
+                      !_isSavingToServer)
+                    Text(
+                      _instructionMessage,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey.shade600,
+                        height: 1.4,
+                      ),
+                    ),
+                  const SizedBox(height: 20),
+                  // زر التقاط الصورة يدوياً (في حال عدم رغبة المستخدم بالانتظار التلقائي):
+                  SizedBox(
+                    width: double.infinity,
+                    height: 60,
+                    child: ElevatedButton.icon(
+                      onPressed:
+                          (!_isProcessing && !_isSavingToServer && _isFaceCurrentlyDetected)
+                              ? _manualOrAutoCapture
+                              : null,
+                      icon: const Icon(Icons.photo_camera, size: 26),
+                      label: const Text(
+                        'التقاط الصورة الآن',
+                        style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue.shade600,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(16)),
+                        elevation: 4,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  // زر إعادة المحاولة:
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: OutlinedButton.icon(
+                      onPressed:
+                          (!_isProcessing && !_isSavingToServer)
+                              ? _resetAndStartOver
+                              : null,
+                      icon: const Icon(Icons.refresh),
+                      label: Text(
+                        _t('retry'),
+                        style: const TextStyle(fontSize: 15),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.blue,
+                        side: BorderSide(
+                            color: Colors.blue.shade200, width: 1.5),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14)),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
-

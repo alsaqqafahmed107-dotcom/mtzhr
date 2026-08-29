@@ -8,7 +8,7 @@ import 'login_screen.dart';
 import 'employee_full_info_screen.dart';
 import 'change_password_screen.dart';
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
   final Employee employee;
   final int clientId;
 
@@ -19,11 +19,20 @@ class ProfileScreen extends StatelessWidget {
   });
 
   @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  @override
+  void initState() {
+    super.initState();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final languageService = Provider.of<LanguageService>(context);
     final isRTL = languageService.isArabic;
     final lang = languageService.isArabic ? 'ar' : 'en';
-
     return Directionality(
       textDirection: isRTL ? TextDirection.rtl : TextDirection.ltr,
       child: Scaffold(
@@ -87,7 +96,7 @@ class ProfileScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  employee.name,
+                  widget.employee.name,
                   style: const TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
@@ -96,16 +105,16 @@ class ProfileScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  employee.position,
+                  widget.employee.position,
                   style: TextStyle(
                     fontSize: 16,
                     color: Colors.white.withValues(alpha: 0.8),
                   ),
                 ),
                 const SizedBox(height: 4),
-                if (employee.department.isNotEmpty)
+                if (widget.employee.department.isNotEmpty)
                   Text(
-                    employee.department,
+                    widget.employee.department,
                     style: TextStyle(
                       fontSize: 14,
                       color: Colors.white.withValues(alpha: 0.7),
@@ -149,14 +158,14 @@ class ProfileScreen extends StatelessWidget {
           ),
           const SizedBox(height: 20),
           _buildDetailRow(Translations.getText('employee_number', lang),
-              employee.employeeNumber, Icons.badge),
+              widget.employee.employeeNumber, Icons.badge),
           _buildDetailRow(
-              Translations.getText('email', lang), employee.email, Icons.email),
+              Translations.getText('email', lang), widget.employee.email, Icons.email),
           _buildDetailRow(Translations.getText('phone_number', lang),
-              employee.phone, Icons.phone),
+              widget.employee.phone, Icons.phone),
           _buildDetailRow(
               Translations.getText('hire_date', lang),
-              employee.hireDate.toString().substring(0, 10),
+              widget.employee.hireDate.toString().substring(0, 10),
               Icons.calendar_today),
         ],
       ),
@@ -238,6 +247,13 @@ class ProfileScreen extends StatelessWidget {
           ),
           const SizedBox(height: 20),
           _buildActionTile(
+            Translations.getText('language', lang),
+            Icons.language,
+            () {
+              _showLanguagePicker(context);
+            },
+          ),
+          _buildActionTile(
             Translations.getText('user_information', lang),
             Icons.person,
             () {
@@ -245,8 +261,8 @@ class ProfileScreen extends StatelessWidget {
                 context,
                 MaterialPageRoute(
                   builder: (context) => EmployeeFullInfoScreen(
-                    clientId: clientId,
-                    email: employee.email,
+                    clientId: widget.clientId,
+                    email: widget.employee.email,
                   ),
                 ),
               );
@@ -260,8 +276,8 @@ class ProfileScreen extends StatelessWidget {
                 context,
                 MaterialPageRoute(
                   builder: (context) => ChangePasswordScreen(
-                    email: employee.email,
-                    clientId: clientId,
+                    email: widget.employee.email,
+                    clientId: widget.clientId,
                   ),
                 ),
               );
@@ -306,6 +322,48 @@ class ProfileScreen extends StatelessWidget {
       ),
       trailing: const Icon(Icons.arrow_forward_ios, size: 16),
       onTap: onTap,
+    );
+  }
+
+  void _showLanguagePicker(BuildContext context) {
+    final languageService = Provider.of<LanguageService>(context, listen: false);
+    final langCode = languageService.currentLocale.languageCode;
+    final lang = languageService.isArabic ? 'ar' : 'en';
+
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text(Translations.getText('select_language', lang)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: LanguageService.supportedLanguages.map((l) {
+              final code = l['code'] as String;
+              final country = l['country'] as String;
+              final nativeName = l['nativeName'] as String;
+
+              return RadioListTile<String>(
+                value: code,
+                groupValue: langCode,
+                title: Text(nativeName),
+                onChanged: (value) async {
+                  if (value == null) return;
+                  await languageService.changeLanguage(code, country);
+                  if (context.mounted) {
+                    Navigator.of(context).pop();
+                  }
+                },
+              );
+            }).toList(),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(Translations.getText('cancel', lang)),
+            ),
+          ],
+        );
+      },
     );
   }
 

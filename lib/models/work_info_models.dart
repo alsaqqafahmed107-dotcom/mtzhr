@@ -91,12 +91,14 @@ class ShiftInfo {
 }
 
 class WorkDay {
+  final int dayNumber;
   final String dayName;
   final bool isWorkingDay;
   final String? startTime;
   final String? endTime;
 
   WorkDay({
+    required this.dayNumber,
     required this.dayName,
     required this.isWorkingDay,
     this.startTime,
@@ -105,6 +107,7 @@ class WorkDay {
 
   factory WorkDay.fromShiftWorkDay(ShiftWorkDay day) {
     return WorkDay(
+      dayNumber: day.dayNumber,
       dayName: day.dayName,
       isWorkingDay: day.isWorkDay,
       startTime: day.workStartTime,
@@ -113,7 +116,7 @@ class WorkDay {
   }
 
   String get displayTimeRange {
-    if (!isWorkingDay) return 'إجازة';
+    if (!isWorkingDay) return '';
     final s = (startTime ?? '').trim();
     final e = (endTime ?? '').trim();
     if (s.isEmpty && e.isEmpty) return '';

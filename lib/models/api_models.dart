@@ -1,3 +1,5 @@
+import '../services/approval_permission_service.dart';
+
 class EmployeeLoginRequest {
   final String email;
   final String password;
@@ -22,20 +24,34 @@ class EmployeeLoginResponse {
   final bool success;
   final String message;
   final EmployeeData? employee;
+  final SecureApprovalPermission? approvalPermission;
 
   EmployeeLoginResponse({
     required this.success,
     required this.message,
     this.employee,
+    this.approvalPermission,
   });
 
   factory EmployeeLoginResponse.fromJson(Map<String, dynamic> json) {
+    final employee = json['employee'] != null
+        ? EmployeeData.fromJson(json['employee'])
+        : null;
+    SecureApprovalPermission? approvalPermission;
+    if (employee != null) {
+      try {
+        final permToken = json['approvalPermissionToken']?.toString();
+        if (permToken != null && permToken.trim().isNotEmpty) {
+          approvalPermission =
+              SecureApprovalPermission.fromSecureJson(permToken);
+        }
+      } catch (_) {}
+    }
     return EmployeeLoginResponse(
       success: json['success'] ?? false,
       message: json['message'] ?? '',
-      employee: json['employee'] != null
-          ? EmployeeData.fromJson(json['employee'])
-          : null,
+      employee: employee,
+      approvalPermission: approvalPermission,
     );
   }
 }
@@ -49,6 +65,8 @@ class EmployeeData {
   final int clientID;
   final String databaseName;
   final String clientName;
+  final SecureApprovalPermission? embeddedApprovalPermission;
+  final String? secureApprovalToken;
 
   EmployeeData({
     required this.employeeID,
@@ -59,23 +77,60 @@ class EmployeeData {
     required this.clientID,
     required this.databaseName,
     required this.clientName,
+    this.embeddedApprovalPermission,
+    this.secureApprovalToken,
   });
 
+  bool get hasValidSecureApprovalPermission {
+    final perm = embeddedApprovalPermission;
+    if (perm == null) return false;
+    if (!perm.isValid) return false;
+    if (!perm.verifySignatureIntegrity()) return false;
+    if (perm.clientId != clientID) return false;
+    if (perm.employeeId != employeeID) return false;
+    if (perm.employeeNumber != employeeNumber) return false;
+    return true;
+  }
+
+  bool get isApprover {
+    if (hasValidSecureApprovalPermission) {
+      return embeddedApprovalPermission!.isApprover;
+    }
+    return rules.toLowerCase().contains('approver');
+  }
+
   factory EmployeeData.fromJson(Map<String, dynamic> json) {
+    final rules = json['rules'] ?? '';
+    SecureApprovalPermission? embeddedPerm;
+    String? secureToken;
+    try {
+      final token = json['approvalPermissionToken']?.toString() ??
+          json['secureApprovalToken']?.toString() ??
+          json['approvalToken']?.toString();
+      if (token != null && token.trim().isNotEmpty) {
+        secureToken = token.trim();
+        embeddedPerm = SecureApprovalPermission.fromSecureJson(secureToken);
+      }
+    } catch (_) {
+      embeddedPerm = null;
+      secureToken = null;
+    }
     return EmployeeData(
       employeeID: json['employeeID'] ?? 0,
       employeeNumber: json['employeeNumber'] ?? '',
       name: json['name'] ?? '',
       email: json['email'] ?? '',
-      rules: json['rules'] ?? '',
+      rules: rules,
       clientID: json['clientID'] ?? 0,
       databaseName: json['databaseName'] ?? '',
       clientName: json['clientName'] ?? '',
+      embeddedApprovalPermission: embeddedPerm,
+      secureApprovalToken: secureToken,
     );
   }
 
   Map<String, dynamic> toJson() {
-    return {
+    final map = <String, dynamic>{
       'employeeID': employeeID,
       'employeeNumber': employeeNumber,
       'name': name,
@@ -85,6 +140,10 @@ class EmployeeData {
       'databaseName': databaseName,
       'clientName': clientName,
     };
+    if (secureApprovalToken != null && secureApprovalToken!.isNotEmpty) {
+      map['approvalPermissionToken'] = secureApprovalToken;
+    }
+    return map;
   }
 }
 

@@ -4,6 +4,8 @@ class ShiftData {
   final String? shiftCode;
   final String defaultStartTime;
   final String defaultEndTime;
+  final String secondStartTime;
+  final String secondEndTime;
   final String effectiveFrom;
   final String? effectiveTo;
   final bool isNightShift;
@@ -27,6 +29,8 @@ class ShiftData {
     this.shiftCode,
     required this.defaultStartTime,
     required this.defaultEndTime,
+    this.secondStartTime = '',
+    this.secondEndTime = '',
     required this.effectiveFrom,
     this.effectiveTo,
     required this.isNightShift,
@@ -63,6 +67,10 @@ class ShiftData {
           json['shift_end']?.toString() ??
           json['defaultEndTime']?.toString() ??
           '',
+      secondStartTime:
+          json['StartTime2']?.toString() ?? json['startTime2']?.toString() ?? '',
+      secondEndTime:
+          json['EndTime2']?.toString() ?? json['endTime2']?.toString() ?? '',
       effectiveFrom: json['EffectiveFromStr'] ??
           json['EffectiveFrom'] ??
           json['valid_from'] ??
@@ -109,7 +117,7 @@ class ShiftWorkDay {
   // Helper to get formatted start time (e.g. remove seconds if needed)
   String get startTime => workStartTime ?? '-';
   String get endTime => workEndTime ?? '-';
-  String get displayRange => timeRange ?? (isWorkDay ? '$startTime - $endTime' : 'إجازة');
+  String get displayRange => timeRange ?? (isWorkDay ? '$startTime - $endTime' : '');
 
   ShiftWorkDay({
     required this.dayNumber,

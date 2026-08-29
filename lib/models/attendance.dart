@@ -82,6 +82,12 @@ class AttendanceModel {
   final String? deviceInfo;
   final double? temperature;
   final String? authenticationMethod; // "GPS", "FINGERPRINT", "FACE"
+  final bool? faceVerificationPassed;
+  final String? faceVerificationAtUtc;
+  final String? faceVerificationEmployeeNumber;
+  final double? faceVerificationConfidence;
+  final double? faceLivenessScore;
+  final String? faceVerificationSource;
 
   // حقول جودة GPS الجديدة
   final int? estimatedSatellites;
@@ -113,6 +119,12 @@ class AttendanceModel {
     this.deviceInfo,
     this.temperature,
     this.authenticationMethod,
+    this.faceVerificationPassed,
+    this.faceVerificationAtUtc,
+    this.faceVerificationEmployeeNumber,
+    this.faceVerificationConfidence,
+    this.faceLivenessScore,
+    this.faceVerificationSource,
     this.estimatedSatellites,
     this.gpsAccuracy,
     this.gpsConfidenceLevel,
@@ -144,6 +156,12 @@ class AttendanceModel {
       deviceInfo: json['DeviceInfo'],
       temperature: json['Temperature']?.toDouble(),
       authenticationMethod: json['AuthenticationMethod'],
+      faceVerificationPassed: json['FaceVerificationPassed'],
+      faceVerificationAtUtc: json['FaceVerificationAtUtc'],
+      faceVerificationEmployeeNumber: json['FaceVerificationEmployeeNumber'],
+      faceVerificationConfidence: json['FaceVerificationConfidence']?.toDouble(),
+      faceLivenessScore: json['FaceLivenessScore']?.toDouble(),
+      faceVerificationSource: json['FaceVerificationSource'],
       estimatedSatellites: json['EstimatedSatellites']?.toInt(),
       gpsAccuracy: json['GpsAccuracy']?.toDouble(),
       gpsConfidenceLevel: json['GpsConfidenceLevel']?.toDouble(),
@@ -177,6 +195,12 @@ class AttendanceModel {
       'DeviceInfo': deviceInfo,
       'Temperature': temperature,
       'AuthenticationMethod': authenticationMethod,
+      'FaceVerificationPassed': faceVerificationPassed,
+      'FaceVerificationAtUtc': faceVerificationAtUtc,
+      'FaceVerificationEmployeeNumber': faceVerificationEmployeeNumber,
+      'FaceVerificationConfidence': faceVerificationConfidence,
+      'FaceLivenessScore': faceLivenessScore,
+      'FaceVerificationSource': faceVerificationSource,
       'EstimatedSatellites': estimatedSatellites,
       'GpsAccuracy': gpsAccuracy,
       'GpsConfidenceLevel': gpsConfidenceLevel,

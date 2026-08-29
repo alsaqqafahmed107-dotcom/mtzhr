@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../services/language_service.dart';
+import '../services/translations.dart';
 
 class FaceEnrollmentScreen extends StatelessWidget {
   final String employeeNumber;
@@ -12,21 +15,21 @@ class FaceEnrollmentScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final lang = context.watch<LanguageService>().currentLocale.languageCode;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('تسجيل الوجه'),
+        title: Text(Translations.getText('face_enrollment', lang)),
       ),
-      body: const Center(
+      body: Center(
         child: Padding(
-          padding: EdgeInsets.all(24),
+          padding: const EdgeInsets.all(24),
           child: Text(
-            'هذه الميزة غير متاحة على الويب',
+            Translations.getText('feature_not_available_web', lang),
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
         ),
       ),
     );
   }
 }
-

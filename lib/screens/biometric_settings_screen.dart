@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:local_auth/local_auth.dart';
+import 'package:provider/provider.dart';
 import '../services/biometric_service.dart';
+import '../services/language_service.dart';
+import '../services/translations.dart';
 
 class BiometricSettingsScreen extends StatefulWidget {
   const BiometricSettingsScreen({super.key});
@@ -18,6 +21,15 @@ class _BiometricSettingsScreenState extends State<BiometricSettingsScreen> {
   bool _isDeviceSupported = false;
   List<BiometricType> _availableBiometrics = [];
   String? _errorMessage;
+
+  String _lang() => Provider.of<LanguageService>(context, listen: false)
+      .currentLocale
+      .languageCode;
+
+  String _t(String key) => Translations.getText(key, _lang());
+
+  String _tParams(String key, Map<String, String> params) =>
+      Translations.getTextWithParams(key, _lang(), params);
 
   // دالة تسجيل الأحداث للتطوير
   void _log(String message) {
@@ -62,7 +74,8 @@ class _BiometricSettingsScreenState extends State<BiometricSettingsScreen> {
     } catch (e) {
       _log('💥 خطأ في فحص حالة البصمة: $e');
       setState(() {
-        _errorMessage = 'خطأ في فحص حالة البصمة: $e';
+        _errorMessage =
+            _tParams('error_checking_biometric_with_error', {'error': e.toString()});
         _isLoading = false;
       });
     }
@@ -71,11 +84,11 @@ class _BiometricSettingsScreenState extends State<BiometricSettingsScreen> {
   String _getBiometricTypeName(BiometricType type) {
     switch (type) {
       case BiometricType.fingerprint:
-        return 'البصمة';
+        return _t('biometric_type_fingerprint');
       case BiometricType.face:
-        return 'التعرف على الوجه';
+        return _t('biometric_type_face');
       case BiometricType.iris:
-        return 'قزحية العين';
+        return _t('biometric_type_iris');
       default:
         return type.toString();
     }
@@ -83,9 +96,10 @@ class _BiometricSettingsScreenState extends State<BiometricSettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final lang = context.watch<LanguageService>().currentLocale.languageCode;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('إعدادات البصمة'),
+        title: Text(Translations.getText('biometric_settings', lang)),
         backgroundColor: const Color(0xFF0EA5E9),
         foregroundColor: Colors.white,
         actions: [
@@ -145,26 +159,26 @@ class _BiometricSettingsScreenState extends State<BiometricSettingsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'حالة الجهاز',
-              style: TextStyle(
+            Text(
+              _t('device_status'),
+              style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
               ),
             ),
             const SizedBox(height: 12),
             _buildStatusRow(
-              'دعم الجهاز للبصمة',
+              _t('device_supports_biometrics'),
               _isDeviceSupported,
               Icons.phone_android,
             ),
             _buildStatusRow(
-              'توفر البصمة',
+              _t('biometric_available'),
               _canCheckBiometrics,
               Icons.fingerprint,
             ),
             _buildStatusRow(
-              'الحالة العامة',
+              _t('overall_status'),
               _canCheckBiometrics && _isDeviceSupported,
               Icons.check_circle,
             ),
@@ -198,7 +212,7 @@ class _BiometricSettingsScreenState extends State<BiometricSettingsScreen> {
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
-              status ? 'متوفر' : 'غير متوفر',
+              status ? _t('available') : _t('not_available'),
               style: TextStyle(
                 color: status ? Colors.green.shade700 : Colors.red.shade700,
                 fontWeight: FontWeight.bold,
@@ -218,18 +232,18 @@ class _BiometricSettingsScreenState extends State<BiometricSettingsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'أنواع البصمة المتوفرة',
-              style: TextStyle(
+            Text(
+              _t('available_biometric_types'),
+              style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
               ),
             ),
             const SizedBox(height: 12),
             if (_availableBiometrics.isEmpty)
-              const Text(
-                'لا توجد أنواع بصمة متوفرة في هذا الجهاز',
-                style: TextStyle(
+              Text(
+                _t('no_biometric_types_available'),
+                style: const TextStyle(
                   color: Colors.grey,
                   fontStyle: FontStyle.italic,
                 ),
@@ -265,9 +279,9 @@ class _BiometricSettingsScreenState extends State<BiometricSettingsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'تعليمات تفعيل البصمة',
-              style: TextStyle(
+            Text(
+              _t('enable_biometric_instructions'),
+              style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
               ),
@@ -275,43 +289,43 @@ class _BiometricSettingsScreenState extends State<BiometricSettingsScreen> {
             const SizedBox(height: 12),
             if (!_isDeviceSupported)
               _buildInstructionItem(
-                '1. تأكد من أن جهازك يدعم البصمة',
-                'بعض الأجهزة القديمة لا تدعم البصمة',
+                _t('instruction_device_support_title'),
+                _t('instruction_device_support_subtitle'),
                 Icons.warning,
                 Colors.orange,
               )
             else if (!_canCheckBiometrics)
               _buildInstructionItem(
-                '1. اذهب إلى إعدادات الجهاز',
-                'Settings > Security > Biometrics',
+                _t('instruction_go_to_settings_title'),
+                _t('instruction_go_to_settings_subtitle'),
                 Icons.settings,
                 Colors.blue,
               )
             else if (_availableBiometrics.isEmpty)
               _buildInstructionItem(
-                '1. قم بإعداد البصمة في إعدادات الجهاز',
-                'Settings > Security > Fingerprint/Face Recognition',
+                _t('instruction_setup_biometric_title'),
+                _t('instruction_setup_biometric_subtitle'),
                 Icons.fingerprint,
                 Colors.green,
               )
             else
               _buildInstructionItem(
-                '✅ البصمة مفعلة وجاهزة للاستخدام',
-                'يمكنك الآن تسجيل البصمة في التطبيق',
+                _t('instruction_biometric_ready_title'),
+                _t('instruction_biometric_ready_subtitle'),
                 Icons.check_circle,
                 Colors.green,
               ),
             const SizedBox(height: 8),
             _buildInstructionItem(
-              '2. أضف بصمة أو وجه في إعدادات الجهاز',
-              'Settings > Security > Add Fingerprint/Face',
+              _t('instruction_add_biometric_title'),
+              _t('instruction_add_biometric_subtitle'),
               Icons.add_circle,
               Colors.blue,
             ),
             const SizedBox(height: 8),
             _buildInstructionItem(
-              '3. عد إلى التطبيق وجرب تسجيل البصمة',
-              'ستتمكن من تسجيل البصمة الآن',
+              _t('instruction_return_and_try_title'),
+              _t('instruction_return_and_try_subtitle'),
               Icons.arrow_back,
               Colors.green,
             ),
@@ -368,17 +382,17 @@ class _BiometricSettingsScreenState extends State<BiometricSettingsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'اختبار البصمة',
-              style: TextStyle(
+            Text(
+              _t('biometric_test'),
+              style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
               ),
             ),
             const SizedBox(height: 12),
-            const Text(
-              'اضغط على الزر أدناه لاختبار البصمة:',
-              style: TextStyle(fontSize: 16),
+            Text(
+              _t('press_button_to_test_biometric'),
+              style: const TextStyle(fontSize: 16),
             ),
             const SizedBox(height: 16),
             SizedBox(
@@ -387,9 +401,9 @@ class _BiometricSettingsScreenState extends State<BiometricSettingsScreen> {
               child: ElevatedButton.icon(
                 onPressed: _canCheckBiometrics ? _testBiometric : null,
                 icon: const Icon(Icons.fingerprint),
-                label: const Text(
-                  'اختبار البصمة',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                label: Text(
+                  _t('test_biometric_button'),
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF0EA5E9),
@@ -410,7 +424,7 @@ class _BiometricSettingsScreenState extends State<BiometricSettingsScreen> {
     try {
       final result = await BiometricService.authenticateForAttendance(
         isCheckIn: true,
-        employeeName: 'اختبار',
+        employeeName: _t('test'),
       );
 
       if (mounted) {
@@ -418,8 +432,8 @@ class _BiometricSettingsScreenState extends State<BiometricSettingsScreen> {
           SnackBar(
             content: Text(
               result
-                  ? '✅ تم التحقق من البصمة بنجاح'
-                  : '❌ فشل في التحقق من البصمة',
+                  ? _t('biometric_test_success')
+                  : _t('biometric_test_failed'),
             ),
             backgroundColor: result ? Colors.green : Colors.red,
           ),
@@ -429,7 +443,9 @@ class _BiometricSettingsScreenState extends State<BiometricSettingsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('❌ خطأ في اختبار البصمة: $e'),
+            content: Text(
+              _tParams('biometric_test_error_with_error', {'error': e.toString()}),
+            ),
             backgroundColor: Colors.red,
           ),
         );
