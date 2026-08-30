@@ -60,16 +60,19 @@ class _AttendanceScreenState extends State<AttendanceScreen>
           final envText = await File(_debugEnvPath).readAsString();
           for (final line in envText.split('\n')) {
             if (line.startsWith('DEBUG_SERVER_URL=')) {
-              _debugServerUrl = line.substring('DEBUG_SERVER_URL='.length).trim();
+              _debugServerUrl =
+                  line.substring('DEBUG_SERVER_URL='.length).trim();
             } else if (line.startsWith('DEBUG_SESSION_ID=')) {
-              _debugSessionId = line.substring('DEBUG_SESSION_ID='.length).trim();
+              _debugSessionId =
+                  line.substring('DEBUG_SESSION_ID='.length).trim();
             }
           }
         } catch (_) {}
       }
       final url = _debugServerUrl ?? 'http://192.168.1.163:7777/event';
       final session = _debugSessionId ?? 'attendance-post-verify-fail';
-      final client = HttpClient()..connectionTimeout = const Duration(seconds: 2);
+      final client = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 2);
       final req = await client.postUrl(
         Uri.parse(url),
       );
@@ -82,7 +85,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         'msg': '[DEBUG] $msg',
         'data': data ?? const {},
         'ts': DateTime.now().millisecondsSinceEpoch,
-        'traceId': '${widget.employeeNumber}-${DateTime.now().microsecondsSinceEpoch}',
+        'traceId':
+            '${widget.employeeNumber}-${DateTime.now().microsecondsSinceEpoch}',
       }));
       await (await req.close()).drain<void>();
       client.close(force: true);
@@ -314,13 +318,26 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   bool _isTruthyFaceResult(Object? navigationResult) {
     if (navigationResult == true) return true;
     if (navigationResult is Map) {
-      return navigationResult['Success'] == true ||
-          navigationResult['success'] == true ||
-          navigationResult['Matched'] == true ||
-          navigationResult['Completed'] == true ||
-          navigationResult['Verified'] == true ||
-          navigationResult['FaceVerified'] == true ||
-          navigationResult['Enrolled'] == true;
+      final resultEmployee = (navigationResult['EmployeeNumber'] ??
+              navigationResult['employeeNumber'] ??
+              '')
+          .toString();
+      final employeeMatches =
+          resultEmployee.isEmpty || resultEmployee == widget.employeeNumber;
+      final reason = (navigationResult['Reason'] ?? '').toString();
+      final context =
+          (navigationResult['VerificationContext'] ?? '').toString();
+
+      return employeeMatches &&
+          (navigationResult['Success'] == true ||
+              navigationResult['success'] == true ||
+              navigationResult['Matched'] == true ||
+              navigationResult['Completed'] == true ||
+              navigationResult['Verified'] == true ||
+              navigationResult['FaceVerified'] == true ||
+              navigationResult['Enrolled'] == true ||
+              (reason == 'verify-success' &&
+                  context == 'ATTENDANCE_CHECKPOINT'));
     }
     if (navigationResult is int) return navigationResult > 0;
     if (navigationResult is String) {
@@ -575,9 +592,10 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         },
       ));
       // #endregion
-      
+
       if (faceStatus['Success'] != true) {
-        _showError('خطأ في التحقق من الوجه', faceStatus['Message'] ?? 'لا يمكن الاتصال بسيرفر البصمة حالياً');
+        _showError('خطأ في التحقق من الوجه',
+            faceStatus['Message'] ?? 'لا يمكن الاتصال بسيرفر البصمة حالياً');
         setState(() {
           _isProcessing = false;
         });
@@ -619,7 +637,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
             faceStatus['HasFaceTemplate'] = true;
             faceStatus['HasFaceImage'] = true;
             FaceApiService.clearLastFaceSession();
-            _log('✅ اكتمل تسجيل الوجه. سيتم الآن تنفيذ التحقق الإلزامي قبل الحضور.');
+            _log(
+                '✅ اكتمل تسجيل الوجه. سيتم الآن تنفيذ التحقق الإلزامي قبل الحضور.');
           }
         }
 
@@ -656,13 +675,20 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
         if (faceVerified) {
           if (navigationResult is Map) {
+            final proofEmployee =
+                navigationResult['EmployeeNumber']?.toString() ??
+                    navigationResult['employeeNumber']?.toString() ??
+                    widget.employeeNumber;
             _faceVerificationProof = {
               'passed': true,
-              'employeeNumber': widget.employeeNumber,
-              'verificationAtUtc': navigationResult['VerificationAtUtc']?.toString() ??
-                  DateTime.now().toUtc().toIso8601String(),
-              'confidenceScore': (navigationResult['ConfidenceScore'] as num?)?.toDouble(),
-              'livenessScore': (navigationResult['LivenessScore'] as num?)?.toDouble(),
+              'employeeNumber': proofEmployee,
+              'verificationAtUtc':
+                  navigationResult['VerificationAtUtc']?.toString() ??
+                      DateTime.now().toUtc().toIso8601String(),
+              'confidenceScore':
+                  (navigationResult['ConfidenceScore'] as num?)?.toDouble(),
+              'livenessScore':
+                  (navigationResult['LivenessScore'] as num?)?.toDouble(),
               'source': navigationResult['Reason']?.toString() ?? 'face-screen',
               'serverMessage': navigationResult['ServerMessage']?.toString(),
             };
@@ -695,7 +721,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
             data: {
               'fallbackOk': fallbackOk,
               'debugLastSessionSuccess': FaceApiService.debugLastSessionSuccess,
-              'debugLastSessionEmployee': FaceApiService.debugLastSessionEmployee,
+              'debugLastSessionEmployee':
+                  FaceApiService.debugLastSessionEmployee,
               'debugLastSessionKind': FaceApiService.debugLastSessionKind,
             },
           ));
@@ -705,13 +732,15 @@ class _AttendanceScreenState extends State<AttendanceScreen>
             _faceVerificationProof = {
               'passed': true,
               'employeeNumber': widget.employeeNumber,
-              'verificationAtUtc':
-                  FaceApiService.debugLastSessionTimestamp?.toUtc().toIso8601String() ??
-                      DateTime.now().toUtc().toIso8601String(),
+              'verificationAtUtc': FaceApiService.debugLastSessionTimestamp
+                      ?.toUtc()
+                      .toIso8601String() ??
+                  DateTime.now().toUtc().toIso8601String(),
               'source': 'face-session-verification-fallback',
             };
             FaceApiService.clearLastFaceSession();
-            _log('🛡️ تم تفعيل الحماية الفائقة (Failsafe Global Flag) — التحقق ناجح | NavResult نوع: (${navigationResult.runtimeType})');
+            _log(
+                '🛡️ تم تفعيل الحماية الفائقة (Failsafe Global Flag) — التحقق ناجح | NavResult نوع: (${navigationResult.runtimeType})');
           }
         }
 
@@ -731,7 +760,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
             data: {
               'fallbackOk': fallback2,
               'debugLastSessionSuccess': FaceApiService.debugLastSessionSuccess,
-              'debugLastSessionEmployee': FaceApiService.debugLastSessionEmployee,
+              'debugLastSessionEmployee':
+                  FaceApiService.debugLastSessionEmployee,
               'debugLastSessionKind': FaceApiService.debugLastSessionKind,
             },
           ));
@@ -741,21 +771,31 @@ class _AttendanceScreenState extends State<AttendanceScreen>
             _faceVerificationProof = {
               'passed': true,
               'employeeNumber': widget.employeeNumber,
-              'verificationAtUtc':
-                  FaceApiService.debugLastSessionTimestamp?.toUtc().toIso8601String() ??
-                      DateTime.now().toUtc().toIso8601String(),
+              'verificationAtUtc': FaceApiService.debugLastSessionTimestamp
+                      ?.toUtc()
+                      .toIso8601String() ??
+                  DateTime.now().toUtc().toIso8601String(),
               'source': 'face-session-verification-fallback-delayed',
             };
             FaceApiService.clearLastFaceSession();
-            _log('🛡️🛡️ الحماية الرابعة (Delayed Fallback 2): تم تفعيلها بعد 600ms → التحقق ناجح.');
+            _log(
+                '🛡️🛡️ الحماية الرابعة (Delayed Fallback 2): تم تفعيلها بعد 600ms → التحقق ناجح.');
           }
         }
 
         // 🔍 DIAGNOSTIC نهائي: طباعة القيم النهائية قبل الشرط الأخير على الجهاز
-        final lastTraceId = DateTime.now().millisecondsSinceEpoch.toRadixString(36);
-        _log('🔎 [TRACE-$lastTraceId] DIAGNOSTIC ATTENDANCE | faceVerified=$faceVerified | NavResult=(${navigationResult.runtimeType}) $navigationResult | Fallback-Exists=${FaceApiService.debugLastSessionSuccess ? "YES" : "NO"} | EmpMatch=${FaceApiService.debugLastSessionEmployee == widget.employeeNumber ? "YES" : "NO"} | HasTemplate=${faceStatus['HasFaceTemplate']} | HasStoredFace=$hasStoredFace');
+        final lastTraceId =
+            DateTime.now().millisecondsSinceEpoch.toRadixString(36);
+        _log(
+            '🔎 [TRACE-$lastTraceId] DIAGNOSTIC ATTENDANCE | faceVerified=$faceVerified | NavResult=(${navigationResult.runtimeType}) $navigationResult | Fallback-Exists=${FaceApiService.debugLastSessionSuccess ? "YES" : "NO"} | EmpMatch=${FaceApiService.debugLastSessionEmployee == widget.employeeNumber ? "YES" : "NO"} | HasTemplate=${faceStatus['HasFaceTemplate']} | HasStoredFace=$hasStoredFace');
 
         if (!faceVerified) {
+          final serverHint = navigationResult is Map
+              ? ((navigationResult['ServerMessage'] ??
+                          navigationResult['Message'])
+                      ?.toString() ??
+                  '')
+              : '';
           final hint = navigationResult == null
               ? ' (ملاحظة: تم إغلاق شاشة التحقق يدوياً).'
               : ' (تم استلام قيمة غير متوقعة: ${navigationResult.runtimeType}).';
@@ -763,7 +803,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               ? 'لا توجد بصمة وجه محفوظة لهذا الموظف بعد، لذلك يجب إكمال تسجيل الوجه أولاً ثم تنفيذ التحقق قبل الحضور.$hint'
               : !hasStoredFace && enrollmentCompleted
                   ? 'تم تسجيل الوجه بنجاح، لكن التحقق الإلزامي بعد التسجيل لم يكتمل أو لم تصل نتيجته إلى شاشة الحضور.$hint'
-                  : 'بصمة الوجه مسجلة لهذا الموظف، لكن المطابقة الحالية لم تنجح أو لم تصل نتيجة النجاح إلى شاشة الحضور.$hint\nإذا ظهرت داخل شاشة البصمة رسالة مثل "لا تتطابق" أو نسبة تشابه منخفضة، فهذا يعني أن الموظف مسجل فعلاً ولكن المطابقة فشلت بسبب اختلاف الصورة الحالية عن الصورة المحفوظة.';
+                  : 'بصمة الوجه مسجلة لهذا الموظف، لكن المطابقة الحالية لم تنجح أو لم تصل نتيجة النجاح إلى شاشة الحضور.$hint\nإذا ظهرت داخل شاشة البصمة رسالة مثل "لا تتطابق" أو نسبة تشابه منخفضة، فهذا يعني أن الموظف مسجل فعلاً ولكن المطابقة فشلت بسبب اختلاف الصورة الحالية عن الصورة المحفوظة.${serverHint.isNotEmpty ? "\nرسالة الخادم: $serverHint" : ""}';
           _showError(
             'فشل التحقق من الوجه',
             verificationMessage,
@@ -773,7 +813,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
           });
           return;
         }
-        
+
         // تسجيل أنه تم استخدام بصمة الوجه بنجاح
         _usedFaceVerification = true;
 
@@ -901,8 +941,10 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               'يرجى المحاولة مرة أخرى');
           return;
         }
-      } else if (widget.authenticationMethod == 'FACE' && _usedFaceVerification) {
-        _log('✅ تم تجاوز التحقق الحيوي المحلي لأن التحقق من الوجه اكتمل بنجاح بالفعل.');
+      } else if (widget.authenticationMethod == 'FACE' &&
+          _usedFaceVerification) {
+        _log(
+            '✅ تم تجاوز التحقق الحيوي المحلي لأن التحقق من الوجه اكتمل بنجاح بالفعل.');
       }
 
       setState(() {
@@ -932,13 +974,18 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         notes: widget.isCheckIn ? 'Check In' : 'Check Out',
         deviceInfo: deviceInfo,
         temperature: null,
-        authenticationMethod: _usedFaceVerification ? 'FACE' : (widget.authenticationMethod ?? 'GPS'),
+        authenticationMethod: _usedFaceVerification
+            ? 'FACE'
+            : (widget.authenticationMethod ?? 'GPS'),
         faceVerificationPassed: _usedFaceVerification,
-        faceVerificationAtUtc: _faceVerificationProof?['verificationAtUtc']?.toString(),
+        faceVerificationAtUtc:
+            _faceVerificationProof?['verificationAtUtc']?.toString(),
         faceVerificationEmployeeNumber:
             _faceVerificationProof?['employeeNumber']?.toString(),
-        faceVerificationConfidence: (_faceVerificationProof?['confidenceScore'] as num?)?.toDouble(),
-        faceLivenessScore: (_faceVerificationProof?['livenessScore'] as num?)?.toDouble(),
+        faceVerificationConfidence:
+            (_faceVerificationProof?['confidenceScore'] as num?)?.toDouble(),
+        faceLivenessScore:
+            (_faceVerificationProof?['livenessScore'] as num?)?.toDouble(),
         faceVerificationSource: _faceVerificationProof?['source']?.toString(),
         isLocationStable: stabilityResult.isStable,
         locationMaxVariation: stabilityResult.maxDistanceVariation,
@@ -1028,20 +1075,32 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
     // أولاً: الأخطاء التي ABSOLUTELY لا يجب إعادة المحاولة لها نهائياً (Stop-List)
     final neverRetryKeywords = [
-      'الموظف غير نشط', 'employee inactive',
-      'الموظف غير موجود', 'not found',
-      'غير مصرح', 'unauthorized',
-      'غير مفعل', 'disabled',
-      'محظور', 'blocked', 'suspended',
-      'انتهت فترة تعيين', 'expired',
-      'لا يمكن تسجيل الحضور مرتين', 'already checked in',
-      'لا يمكن تسجيل الانصراف بدون', 'cannot checkout without',
-      'تعيين الموظف للموقع يبدأ من', 'not started',
-      'إثبات التحقق من الوجه', 'التحقق من الوجه مطلوب',
-      'انتهت صلاحية التحقق من الوجه', 'عدم تطابق بيانات التحقق',
+      'الموظف غير نشط',
+      'employee inactive',
+      'الموظف غير موجود',
+      'not found',
+      'غير مصرح',
+      'unauthorized',
+      'غير مفعل',
+      'disabled',
+      'محظور',
+      'blocked',
+      'suspended',
+      'انتهت فترة تعيين',
+      'expired',
+      'لا يمكن تسجيل الحضور مرتين',
+      'already checked in',
+      'لا يمكن تسجيل الانصراف بدون',
+      'cannot checkout without',
+      'تعيين الموظف للموقع يبدأ من',
+      'not started',
+      'إثبات التحقق من الوجه',
+      'التحقق من الوجه مطلوب',
+      'انتهت صلاحية التحقق من الوجه',
+      'عدم تطابق بيانات التحقق',
     ];
-    final isBlocked = neverRetryKeywords.any((k) =>
-        errorMessage.contains(k) || msgLower.contains(k.toLowerCase()));
+    final isBlocked = neverRetryKeywords.any(
+        (k) => errorMessage.contains(k) || msgLower.contains(k.toLowerCase()));
     if (isBlocked) return false;
 
     // ثانياً: الأخطاء التي يُنصح دائماً بإعادة المحاولة لها (Go-List)
@@ -1064,8 +1123,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       // أخطاء عامة قابلة للإعادة
       'error', 'failed', 'خطأ', 'فشل',
     ];
-    return alwaysRetryKeywords.any((k) =>
-        errorMessage.contains(k) || msgLower.contains(k.toLowerCase()));
+    return alwaysRetryKeywords.any(
+        (k) => errorMessage.contains(k) || msgLower.contains(k.toLowerCase()));
   }
 
   // دالة إعادة المحاولة
@@ -1088,10 +1147,12 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     String details = '';
 
     // تحليل الرسائل العربية أو الإنجليزية
-    if (apiMessage.contains('الموظف غير معين لأي موقع') || apiMessage.toLowerCase().contains('not assigned')) {
+    if (apiMessage.contains('الموظف غير معين لأي موقع') ||
+        apiMessage.toLowerCase().contains('not assigned')) {
       title = Translations.getText('employee_not_assigned', lang);
       details = Translations.getText('contact_admin_for_assignment', lang);
-    } else if (apiMessage.contains('أنت خارج نطاق الموقع المعين لك') || apiMessage.toLowerCase().contains('outside')) {
+    } else if (apiMessage.contains('أنت خارج نطاق الموقع المعين لك') ||
+        apiMessage.toLowerCase().contains('outside')) {
       title = Translations.getText('outside_assigned_location', lang);
       // استخراج اسم الموقع المعين من الرسالة إذا كان متوفراً
       String locationName = '';
@@ -1120,7 +1181,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         .contains('لا يمكن تسجيل الانصراف بدون تسجيل الحضور')) {
       title = Translations.getText('cannot_checkout_without_checkin', lang);
       details = Translations.getText('check_in_first_then_checkout', lang);
-    } else if (apiMessage.contains('لا يمكن تسجيل الحضور مرتين') || apiMessage.toLowerCase().contains('already checked in')) {
+    } else if (apiMessage.contains('لا يمكن تسجيل الحضور مرتين') ||
+        apiMessage.toLowerCase().contains('already checked in')) {
       title = Translations.getText('already_checked_in', lang);
       details = Translations.getText('cannot_check_in_twice', lang);
     } else if (apiMessage.contains('الموظف غير نشط')) {
@@ -1163,7 +1225,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       title = 'عدم تطابق بيانات التحقق';
       details =
           'تم رفض العملية لأن إثبات الوجه لا يخص نفس الموظف الحالي. أعد تسجيل الدخول بالحساب الصحيح ثم كرر التحقق.';
-    } else if (apiMessage.contains('تعذر تأكيد التحقق من الوجه من سجلات الخادم')) {
+    } else if (apiMessage
+        .contains('تعذر تأكيد التحقق من الوجه من سجلات الخادم')) {
       title = 'تعذر اعتماد التحقق من الوجه';
       details =
           'تحقق الوجه لم يُسجل بشكل مكتمل على الخادم. أعد التحقق من الوجه ثم حاول مرة أخرى.';
@@ -1302,583 +1365,601 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                           physics: const AlwaysScrollableScrollPhysics(),
                           padding: const EdgeInsets.all(20),
                           child: Column(
-                          children: [
-                            // البطاقة الرئيسية
-                            AnimatedBuilder(
-                              animation: _cardAnimation,
-                              builder: (context, child) {
-                                return Transform.scale(
-                                  scale: _cardAnimation.value,
-                                  child: Container(
-                                    width: double.infinity,
-                                    padding: const EdgeInsets.all(30),
-                                    decoration: BoxDecoration(
-                                      gradient: LinearGradient(
-                                        colors: [
-                                          Colors.white,
-                                          Colors.grey.shade50,
+                            children: [
+                              // البطاقة الرئيسية
+                              AnimatedBuilder(
+                                animation: _cardAnimation,
+                                builder: (context, child) {
+                                  return Transform.scale(
+                                    scale: _cardAnimation.value,
+                                    child: Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.all(30),
+                                      decoration: BoxDecoration(
+                                        gradient: LinearGradient(
+                                          colors: [
+                                            Colors.white,
+                                            Colors.grey.shade50,
+                                          ],
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                        ),
+                                        borderRadius: BorderRadius.circular(24),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color:
+                                                Colors.black.withOpacity(0.1),
+                                            blurRadius: 20,
+                                            offset: const Offset(0, 10),
+                                          ),
+                                          BoxShadow(
+                                            color:
+                                                Colors.black.withOpacity(0.05),
+                                            blurRadius: 40,
+                                            offset: const Offset(0, 20),
+                                          ),
                                         ],
-                                        begin: Alignment.topLeft,
-                                        end: Alignment.bottomRight,
                                       ),
-                                      borderRadius: BorderRadius.circular(24),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.black.withOpacity(0.1),
-                                          blurRadius: 20,
-                                          offset: const Offset(0, 10),
-                                        ),
-                                        BoxShadow(
-                                          color: Colors.black.withOpacity(0.05),
-                                          blurRadius: 40,
-                                          offset: const Offset(0, 20),
-                                        ),
-                                      ],
-                                    ),
-                                    child: Column(
-                                      children: [
-                                        // أيقونة ثلاثية الأبعاد
-                                        Container(
-                                          width: 120,
-                                          height: 120,
-                                          decoration: BoxDecoration(
-                                            gradient: LinearGradient(
-                                              colors: widget.isCheckIn
-                                                  ? [
-                                                      Colors.green.shade400,
-                                                      Colors.green.shade600
-                                                    ]
-                                                  : [
-                                                      Colors.red.shade400,
-                                                      Colors.red.shade600
-                                                    ],
-                                              begin: Alignment.topLeft,
-                                              end: Alignment.bottomRight,
-                                            ),
-                                            borderRadius:
-                                                BorderRadius.circular(60),
-                                            boxShadow: [
-                                              BoxShadow(
-                                                color: (widget.isCheckIn
-                                                        ? Colors.green
-                                                        : Colors.red)
-                                                    .withOpacity(0.3),
-                                                blurRadius: 20,
-                                                offset: const Offset(0, 10),
-                                              ),
-                                            ],
-                                          ),
-                                          child: Icon(
-                                            widget.isCheckIn
-                                                ? Icons.login
-                                                : Icons.logout,
-                                            size: 60,
-                                            color: Colors.white,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 24),
-
-                                        // اسم الموظف
-                                        Text(
-                                          widget.employeeName ??
-                                              Translations.getText(
-                                                  'employee', lang),
-                                          style: const TextStyle(
-                                            fontSize: 24,
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.black87,
-                                          ),
-                                          textAlign: TextAlign.center,
-                                        ),
-                                        const SizedBox(height: 8),
-
-                                        // رقم الموظف
-                                        Text(
-                                          '${Translations.getText('employee_number_label', lang)}: ${widget.employeeNumber}',
-                                          style: TextStyle(
-                                            fontSize: 16,
-                                            color: Colors.grey.shade600,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 20),
-
-                                        // حالة العملية
-                                        if (_isInitializing ||
-                                            _isProcessing) ...[
+                                      child: Column(
+                                        children: [
+                                          // أيقونة ثلاثية الأبعاد
                                           Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 20,
-                                              vertical: 12,
-                                            ),
+                                            width: 120,
+                                            height: 120,
                                             decoration: BoxDecoration(
-                                              color: Colors.blue.shade50,
-                                              borderRadius:
-                                                  BorderRadius.circular(20),
-                                              border: Border.all(
-                                                color: Colors.blue.shade200,
+                                              gradient: LinearGradient(
+                                                colors: widget.isCheckIn
+                                                    ? [
+                                                        Colors.green.shade400,
+                                                        Colors.green.shade600
+                                                      ]
+                                                    : [
+                                                        Colors.red.shade400,
+                                                        Colors.red.shade600
+                                                      ],
+                                                begin: Alignment.topLeft,
+                                                end: Alignment.bottomRight,
                                               ),
-                                            ),
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                SizedBox(
-                                                  width: 16,
-                                                  height: 16,
-                                                  child:
-                                                      CircularProgressIndicator(
-                                                    strokeWidth: 2,
-                                                    valueColor:
-                                                        AlwaysStoppedAnimation<
-                                                            Color>(
-                                                      Colors.blue.shade600,
-                                                    ),
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 12),
-                                                Text(
-                                                  _currentStep,
-                                                  style: TextStyle(
-                                                    color: Colors.blue.shade700,
-                                                    fontWeight: FontWeight.w500,
-                                                  ),
+                                              borderRadius:
+                                                  BorderRadius.circular(60),
+                                              boxShadow: [
+                                                BoxShadow(
+                                                  color: (widget.isCheckIn
+                                                          ? Colors.green
+                                                          : Colors.red)
+                                                      .withOpacity(0.3),
+                                                  blurRadius: 20,
+                                                  offset: const Offset(0, 10),
                                                 ),
                                               ],
                                             ),
-                                          ),
-                                        ] else if (_isSuccess != null) ...[
-                                          // نتيجة العملية
-                                          AnimatedBuilder(
-                                            animation: _isSuccess!
-                                                ? _successController
-                                                : _errorController,
-                                            builder: (context, child) {
-                                              return Transform.scale(
-                                                scale: _isSuccess!
-                                                    ? _successScaleAnimation
-                                                        .value
-                                                    : 1.0,
-                                                child: Container(
-                                                  padding:
-                                                      const EdgeInsets.all(20),
-                                                  decoration: BoxDecoration(
-                                                    color: _isSuccess!
-                                                        ? Colors.green.shade50
-                                                        : Colors.red.shade50,
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                            16),
-                                                    border: Border.all(
-                                                      color: _isSuccess!
-                                                          ? Colors
-                                                              .green.shade200
-                                                          : Colors.red.shade200,
-                                                    ),
-                                                  ),
-                                                  child: Column(
-                                                    children: [
-                                                      Icon(
-                                                        _isSuccess!
-                                                            ? Icons.check_circle
-                                                            : Icons.error,
-                                                        size: 48,
-                                                        color: _isSuccess!
-                                                            ? Colors.green
-                                                            : Colors.red,
-                                                      ),
-                                                      const SizedBox(
-                                                          height: 12),
-                                                      Text(
-                                                        _resultMessage,
-                                                        style: TextStyle(
-                                                          fontSize: 18,
-                                                          fontWeight:
-                                                              FontWeight.bold,
-                                                          color: _isSuccess!
-                                                              ? Colors.green
-                                                                  .shade700
-                                                              : Colors
-                                                                  .red.shade700,
-                                                        ),
-                                                        textAlign:
-                                                            TextAlign.center,
-                                                      ),
-                                                      const SizedBox(height: 8),
-                                                      Text(
-                                                        _resultDetails,
-                                                        style: TextStyle(
-                                                          fontSize: 14,
-                                                          color: _isSuccess!
-                                                              ? Colors.green
-                                                                  .shade600
-                                                              : Colors
-                                                                  .red.shade600,
-                                                        ),
-                                                        textAlign:
-                                                            TextAlign.center,
-                                                      ),
-                                                      // زر إعادة المحاولة للرسائل التي يمكن إعادة المحاولة فيها
-                                                      if (!_isSuccess! &&
-                                                          _canRetry(
-                                                              _resultMessage)) ...[
-                                                        const SizedBox(
-                                                            height: 16),
-                                                        Container(
-                                                          width:
-                                                              double.infinity,
-                                                          height: 45,
-                                                          decoration:
-                                                              BoxDecoration(
-                                                            gradient:
-                                                                LinearGradient(
-                                                              colors: [
-                                                                Colors.orange
-                                                                    .shade400,
-                                                                Colors.orange
-                                                                    .shade600,
-                                                              ],
-                                                              begin: Alignment
-                                                                  .topLeft,
-                                                              end: Alignment
-                                                                  .bottomRight,
-                                                            ),
-                                                            borderRadius:
-                                                                BorderRadius
-                                                                    .circular(
-                                                                        22),
-                                                            boxShadow: [
-                                                              BoxShadow(
-                                                                color: Colors
-                                                                    .orange
-                                                                    .withOpacity(
-                                                                        0.3),
-                                                                blurRadius: 10,
-                                                                offset:
-                                                                    const Offset(
-                                                                        0, 4),
-                                                              ),
-                                                            ],
-                                                          ),
-                                                          child: Material(
-                                                            color: Colors
-                                                                .transparent,
-                                                            child: InkWell(
-                                                              onTap:
-                                                                  _retryOperation,
-                                                              borderRadius:
-                                                                  BorderRadius
-                                                                      .circular(
-                                                                          22),
-                                                              child: Center(
-                                                                child: Row(
-                                                                  mainAxisAlignment:
-                                                                      MainAxisAlignment
-                                                                          .center,
-                                                                  children: [
-                                                                    Icon(
-                                                                      Icons
-                                                                          .refresh,
-                                                                      color: Colors
-                                                                          .white,
-                                                                      size: 20,
-                                                                    ),
-                                                                    const SizedBox(
-                                                                        width:
-                                                                            8),
-                                                                    Text(
-                                                                      Translations.getText(
-                                                                          'retry',
-                                                                          lang),
-                                                                      style:
-                                                                          const TextStyle(
-                                                                        color: Colors
-                                                                            .white,
-                                                                        fontSize:
-                                                                            16,
-                                                                        fontWeight:
-                                                                            FontWeight.bold,
-                                                                      ),
-                                                                    ),
-                                                                  ],
-                                                                ),
-                                                              ),
-                                                            ),
-                                                          ),
-                                                        ),
-                                                      ],
-                                                      // معلومات إضافية في حالة النجاح - الوقت المسجل من السيرفر
-                                                      if (_isSuccess! &&
-                                                          _currentPosition !=
-                                                              null) ...[
-                                                        const SizedBox(
-                                                            height: 16),
-                                                        Container(
-                                                          padding:
-                                                              const EdgeInsets
-                                                                  .all(12),
-                                                          decoration:
-                                                              BoxDecoration(
-                                                            color: Colors
-                                                                .green.shade50,
-                                                            borderRadius:
-                                                                BorderRadius
-                                                                    .circular(
-                                                                        12),
-                                                            border: Border.all(
-                                                              color: Colors
-                                                                  .green
-                                                                  .shade200,
-                                                            ),
-                                                          ),
-                                                          child: Row(
-                                                            children: [
-                                                              Icon(
-                                                                Icons
-                                                                    .check_circle_outline,
-                                                                color: Colors
-                                                                    .green
-                                                                    .shade600,
-                                                                size: 20,
-                                                              ),
-                                                              const SizedBox(
-                                                                  width: 8),
-                                                              Expanded(
-                                                                child: Column(
-                                                                  crossAxisAlignment:
-                                                                      CrossAxisAlignment
-                                                                          .start,
-                                                                  children: [
-                                                                    Text(
-                                                                      Translations.getText(
-                                                                          'registered_location',
-                                                                          lang),
-                                                                      style:
-                                                                          TextStyle(
-                                                                        fontSize:
-                                                                            12,
-                                                                        fontWeight:
-                                                                            FontWeight.bold,
-                                                                        color: Colors
-                                                                            .green
-                                                                            .shade700,
-                                                                      ),
-                                                                    ),
-                                                                    const SizedBox(
-                                                                        height:
-                                                                            4),
-                                                                    Text(
-                                                                      '${_currentPosition!.latitude.toStringAsFixed(6)}, ${_currentPosition!.longitude.toStringAsFixed(6)}',
-                                                                      style:
-                                                                          TextStyle(
-                                                                        fontSize:
-                                                                            11,
-                                                                        color: Colors
-                                                                            .green
-                                                                            .shade600,
-                                                                      ),
-                                                                    ),
-                                                                  ],
-                                                                ),
-                                                              ),
-                                                            ],
-                                                          ),
-                                                        ),
-                                                      ],
-                                                    ],
-                                                  ),
-                                                ),
-                                              );
-                                            },
-                                          ),
-                                        ] else ...[
-                                          // زر التأكيد
-                                          AnimatedBuilder(
-                                            animation: _pulseAnimation,
-                                            builder: (context, child) {
-                                              return Transform.scale(
-                                                scale: _pulseAnimation.value,
-                                                child: Container(
-                                                  width: double.infinity,
-                                                  height: 60,
-                                                  decoration: BoxDecoration(
-                                                    gradient: LinearGradient(
-                                                      colors: widget.isCheckIn
-                                                          ? [
-                                                              Colors.green
-                                                                  .shade500,
-                                                              Colors.green
-                                                                  .shade700
-                                                            ]
-                                                          : [
-                                                              Colors
-                                                                  .red.shade500,
-                                                              Colors
-                                                                  .red.shade700
-                                                            ],
-                                                      begin: Alignment.topLeft,
-                                                      end:
-                                                          Alignment.bottomRight,
-                                                    ),
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                            30),
-                                                    boxShadow: [
-                                                      BoxShadow(
-                                                        color: (widget.isCheckIn
-                                                                ? Colors.green
-                                                                : Colors.red)
-                                                            .withOpacity(0.3),
-                                                        blurRadius: 15,
-                                                        offset:
-                                                            const Offset(0, 8),
-                                                      ),
-                                                    ],
-                                                  ),
-                                                  child: Material(
-                                                    color: Colors.transparent,
-                                                    child: InkWell(
-                                                      onTap: _processAttendance,
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                              30),
-                                                      child: Center(
-                                                        child: Text(
-                                                          widget.isCheckIn
-                                                              ? Translations
-                                                                  .getText(
-                                                                      'register_attendance',
-                                                                      lang)
-                                                              : Translations
-                                                                  .getText(
-                                                                      'register_departure',
-                                                                      lang),
-                                                          style:
-                                                              const TextStyle(
-                                                            color: Colors.white,
-                                                            fontSize: 18,
-                                                            fontWeight:
-                                                                FontWeight.bold,
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ),
-                                              );
-                                            },
-                                          ),
-                                        ],
-                                      ],
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-
-                            const SizedBox(height: 30),
-
-                            // معلومات إضافية
-                            if (!_isInitializing &&
-                                !_isProcessing &&
-                                _isSuccess == null) ...[
-                              Container(
-                                padding: const EdgeInsets.all(20),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.8),
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(
-                                    color: Colors.grey.shade200,
-                                  ),
-                                ),
-                                child: Column(
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Icon(
-                                          Icons.info_outline,
-                                          color: Colors.blue.shade600,
-                                          size: 20,
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          Translations.getText(
-                                              'important_information', lang),
-                                          style: TextStyle(
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.blue.shade700,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 12),
-                                    Text(
-                                      Translations.getText(
-                                          'location_requirements', lang),
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: Colors.grey.shade600,
-                                        height: 1.5,
-                                      ),
-                                    ),
-                                    // عرض معلومات الموقع الحالي
-                                    if (_currentPosition != null) ...[
-                                      const SizedBox(height: 16),
-                                      Container(
-                                        padding: const EdgeInsets.all(12),
-                                        decoration: BoxDecoration(
-                                          color: Colors.green.shade50,
-                                          borderRadius:
-                                              BorderRadius.circular(12),
-                                          border: Border.all(
-                                            color: Colors.green.shade200,
-                                          ),
-                                        ),
-                                        child: Row(
-                                          children: [
-                                            Icon(
-                                              Icons.location_on,
-                                              color: Colors.green.shade600,
-                                              size: 20,
+                                            child: Icon(
+                                              widget.isCheckIn
+                                                  ? Icons.login
+                                                  : Icons.logout,
+                                              size: 60,
+                                              color: Colors.white,
                                             ),
-                                            const SizedBox(width: 8),
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
+                                          ),
+                                          const SizedBox(height: 24),
+
+                                          // اسم الموظف
+                                          Text(
+                                            widget.employeeName ??
+                                                Translations.getText(
+                                                    'employee', lang),
+                                            style: const TextStyle(
+                                              fontSize: 24,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.black87,
+                                            ),
+                                            textAlign: TextAlign.center,
+                                          ),
+                                          const SizedBox(height: 8),
+
+                                          // رقم الموظف
+                                          Text(
+                                            '${Translations.getText('employee_number_label', lang)}: ${widget.employeeNumber}',
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              color: Colors.grey.shade600,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 20),
+
+                                          // حالة العملية
+                                          if (_isInitializing ||
+                                              _isProcessing) ...[
+                                            Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                horizontal: 20,
+                                                vertical: 12,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: Colors.blue.shade50,
+                                                borderRadius:
+                                                    BorderRadius.circular(20),
+                                                border: Border.all(
+                                                  color: Colors.blue.shade200,
+                                                ),
+                                              ),
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
                                                 children: [
-                                                  Text(
-                                                    Translations.getText(
-                                                        'current_location',
-                                                        lang),
-                                                    style: TextStyle(
-                                                      fontSize: 12,
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                      color:
-                                                          Colors.green.shade700,
+                                                  SizedBox(
+                                                    width: 16,
+                                                    height: 16,
+                                                    child:
+                                                        CircularProgressIndicator(
+                                                      strokeWidth: 2,
+                                                      valueColor:
+                                                          AlwaysStoppedAnimation<
+                                                              Color>(
+                                                        Colors.blue.shade600,
+                                                      ),
                                                     ),
                                                   ),
-                                                  const SizedBox(height: 4),
+                                                  const SizedBox(width: 12),
                                                   Text(
-                                                    '${_currentPosition!.latitude.toStringAsFixed(6)}, ${_currentPosition!.longitude.toStringAsFixed(6)}',
+                                                    _currentStep,
                                                     style: TextStyle(
-                                                      fontSize: 11,
                                                       color:
-                                                          Colors.green.shade600,
+                                                          Colors.blue.shade700,
+                                                      fontWeight:
+                                                          FontWeight.w500,
                                                     ),
                                                   ),
                                                 ],
                                               ),
                                             ),
+                                          ] else if (_isSuccess != null) ...[
+                                            // نتيجة العملية
+                                            AnimatedBuilder(
+                                              animation: _isSuccess!
+                                                  ? _successController
+                                                  : _errorController,
+                                              builder: (context, child) {
+                                                return Transform.scale(
+                                                  scale: _isSuccess!
+                                                      ? _successScaleAnimation
+                                                          .value
+                                                      : 1.0,
+                                                  child: Container(
+                                                    padding:
+                                                        const EdgeInsets.all(
+                                                            20),
+                                                    decoration: BoxDecoration(
+                                                      color: _isSuccess!
+                                                          ? Colors.green.shade50
+                                                          : Colors.red.shade50,
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              16),
+                                                      border: Border.all(
+                                                        color: _isSuccess!
+                                                            ? Colors
+                                                                .green.shade200
+                                                            : Colors
+                                                                .red.shade200,
+                                                      ),
+                                                    ),
+                                                    child: Column(
+                                                      children: [
+                                                        Icon(
+                                                          _isSuccess!
+                                                              ? Icons
+                                                                  .check_circle
+                                                              : Icons.error,
+                                                          size: 48,
+                                                          color: _isSuccess!
+                                                              ? Colors.green
+                                                              : Colors.red,
+                                                        ),
+                                                        const SizedBox(
+                                                            height: 12),
+                                                        Text(
+                                                          _resultMessage,
+                                                          style: TextStyle(
+                                                            fontSize: 18,
+                                                            fontWeight:
+                                                                FontWeight.bold,
+                                                            color: _isSuccess!
+                                                                ? Colors.green
+                                                                    .shade700
+                                                                : Colors.red
+                                                                    .shade700,
+                                                          ),
+                                                          textAlign:
+                                                              TextAlign.center,
+                                                        ),
+                                                        const SizedBox(
+                                                            height: 8),
+                                                        Text(
+                                                          _resultDetails,
+                                                          style: TextStyle(
+                                                            fontSize: 14,
+                                                            color: _isSuccess!
+                                                                ? Colors.green
+                                                                    .shade600
+                                                                : Colors.red
+                                                                    .shade600,
+                                                          ),
+                                                          textAlign:
+                                                              TextAlign.center,
+                                                        ),
+                                                        // زر إعادة المحاولة للرسائل التي يمكن إعادة المحاولة فيها
+                                                        if (!_isSuccess! &&
+                                                            _canRetry(
+                                                                _resultMessage)) ...[
+                                                          const SizedBox(
+                                                              height: 16),
+                                                          Container(
+                                                            width:
+                                                                double.infinity,
+                                                            height: 45,
+                                                            decoration:
+                                                                BoxDecoration(
+                                                              gradient:
+                                                                  LinearGradient(
+                                                                colors: [
+                                                                  Colors.orange
+                                                                      .shade400,
+                                                                  Colors.orange
+                                                                      .shade600,
+                                                                ],
+                                                                begin: Alignment
+                                                                    .topLeft,
+                                                                end: Alignment
+                                                                    .bottomRight,
+                                                              ),
+                                                              borderRadius:
+                                                                  BorderRadius
+                                                                      .circular(
+                                                                          22),
+                                                              boxShadow: [
+                                                                BoxShadow(
+                                                                  color: Colors
+                                                                      .orange
+                                                                      .withOpacity(
+                                                                          0.3),
+                                                                  blurRadius:
+                                                                      10,
+                                                                  offset:
+                                                                      const Offset(
+                                                                          0, 4),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                            child: Material(
+                                                              color: Colors
+                                                                  .transparent,
+                                                              child: InkWell(
+                                                                onTap:
+                                                                    _retryOperation,
+                                                                borderRadius:
+                                                                    BorderRadius
+                                                                        .circular(
+                                                                            22),
+                                                                child: Center(
+                                                                  child: Row(
+                                                                    mainAxisAlignment:
+                                                                        MainAxisAlignment
+                                                                            .center,
+                                                                    children: [
+                                                                      Icon(
+                                                                        Icons
+                                                                            .refresh,
+                                                                        color: Colors
+                                                                            .white,
+                                                                        size:
+                                                                            20,
+                                                                      ),
+                                                                      const SizedBox(
+                                                                          width:
+                                                                              8),
+                                                                      Text(
+                                                                        Translations.getText(
+                                                                            'retry',
+                                                                            lang),
+                                                                        style:
+                                                                            const TextStyle(
+                                                                          color:
+                                                                              Colors.white,
+                                                                          fontSize:
+                                                                              16,
+                                                                          fontWeight:
+                                                                              FontWeight.bold,
+                                                                        ),
+                                                                      ),
+                                                                    ],
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                        // معلومات إضافية في حالة النجاح - الوقت المسجل من السيرفر
+                                                        if (_isSuccess! &&
+                                                            _currentPosition !=
+                                                                null) ...[
+                                                          const SizedBox(
+                                                              height: 16),
+                                                          Container(
+                                                            padding:
+                                                                const EdgeInsets
+                                                                    .all(12),
+                                                            decoration:
+                                                                BoxDecoration(
+                                                              color: Colors
+                                                                  .green
+                                                                  .shade50,
+                                                              borderRadius:
+                                                                  BorderRadius
+                                                                      .circular(
+                                                                          12),
+                                                              border:
+                                                                  Border.all(
+                                                                color: Colors
+                                                                    .green
+                                                                    .shade200,
+                                                              ),
+                                                            ),
+                                                            child: Row(
+                                                              children: [
+                                                                Icon(
+                                                                  Icons
+                                                                      .check_circle_outline,
+                                                                  color: Colors
+                                                                      .green
+                                                                      .shade600,
+                                                                  size: 20,
+                                                                ),
+                                                                const SizedBox(
+                                                                    width: 8),
+                                                                Expanded(
+                                                                  child: Column(
+                                                                    crossAxisAlignment:
+                                                                        CrossAxisAlignment
+                                                                            .start,
+                                                                    children: [
+                                                                      Text(
+                                                                        Translations.getText(
+                                                                            'registered_location',
+                                                                            lang),
+                                                                        style:
+                                                                            TextStyle(
+                                                                          fontSize:
+                                                                              12,
+                                                                          fontWeight:
+                                                                              FontWeight.bold,
+                                                                          color: Colors
+                                                                              .green
+                                                                              .shade700,
+                                                                        ),
+                                                                      ),
+                                                                      const SizedBox(
+                                                                          height:
+                                                                              4),
+                                                                      Text(
+                                                                        '${_currentPosition!.latitude.toStringAsFixed(6)}, ${_currentPosition!.longitude.toStringAsFixed(6)}',
+                                                                        style:
+                                                                            TextStyle(
+                                                                          fontSize:
+                                                                              11,
+                                                                          color: Colors
+                                                                              .green
+                                                                              .shade600,
+                                                                        ),
+                                                                      ),
+                                                                    ],
+                                                                  ),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ],
+                                                    ),
+                                                  ),
+                                                );
+                                              },
+                                            ),
+                                          ] else ...[
+                                            // زر التأكيد
+                                            AnimatedBuilder(
+                                              animation: _pulseAnimation,
+                                              builder: (context, child) {
+                                                return Transform.scale(
+                                                  scale: _pulseAnimation.value,
+                                                  child: Container(
+                                                    width: double.infinity,
+                                                    height: 60,
+                                                    decoration: BoxDecoration(
+                                                      gradient: LinearGradient(
+                                                        colors: widget.isCheckIn
+                                                            ? [
+                                                                Colors.green
+                                                                    .shade500,
+                                                                Colors.green
+                                                                    .shade700
+                                                              ]
+                                                            : [
+                                                                Colors.red
+                                                                    .shade500,
+                                                                Colors.red
+                                                                    .shade700
+                                                              ],
+                                                        begin:
+                                                            Alignment.topLeft,
+                                                        end: Alignment
+                                                            .bottomRight,
+                                                      ),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              30),
+                                                      boxShadow: [
+                                                        BoxShadow(
+                                                          color: (widget
+                                                                      .isCheckIn
+                                                                  ? Colors.green
+                                                                  : Colors.red)
+                                                              .withOpacity(0.3),
+                                                          blurRadius: 15,
+                                                          offset: const Offset(
+                                                              0, 8),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    child: Material(
+                                                      color: Colors.transparent,
+                                                      child: InkWell(
+                                                        onTap:
+                                                            _processAttendance,
+                                                        borderRadius:
+                                                            BorderRadius
+                                                                .circular(30),
+                                                        child: Center(
+                                                          child: Text(
+                                                            widget.isCheckIn
+                                                                ? Translations
+                                                                    .getText(
+                                                                        'register_attendance',
+                                                                        lang)
+                                                                : Translations
+                                                                    .getText(
+                                                                        'register_departure',
+                                                                        lang),
+                                                            style:
+                                                                const TextStyle(
+                                                              color:
+                                                                  Colors.white,
+                                                              fontSize: 18,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .bold,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                );
+                                              },
+                                            ),
                                           ],
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+
+                              const SizedBox(height: 30),
+
+                              // معلومات إضافية
+                              if (!_isInitializing &&
+                                  !_isProcessing &&
+                                  _isSuccess == null) ...[
+                                Container(
+                                  padding: const EdgeInsets.all(20),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.8),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(
+                                      color: Colors.grey.shade200,
+                                    ),
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Icon(
+                                            Icons.info_outline,
+                                            color: Colors.blue.shade600,
+                                            size: 20,
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            Translations.getText(
+                                                'important_information', lang),
+                                            style: TextStyle(
+                                              fontSize: 16,
+                                              fontWeight: FontWeight.bold,
+                                              color: Colors.blue.shade700,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        Translations.getText(
+                                            'location_requirements', lang),
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          color: Colors.grey.shade600,
+                                          height: 1.5,
                                         ),
                                       ),
+                                      // عرض معلومات الموقع الحالي
+                                      if (_currentPosition != null) ...[
+                                        const SizedBox(height: 16),
+                                        Container(
+                                          padding: const EdgeInsets.all(12),
+                                          decoration: BoxDecoration(
+                                            color: Colors.green.shade50,
+                                            borderRadius:
+                                                BorderRadius.circular(12),
+                                            border: Border.all(
+                                              color: Colors.green.shade200,
+                                            ),
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Icon(
+                                                Icons.location_on,
+                                                color: Colors.green.shade600,
+                                                size: 20,
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      Translations.getText(
+                                                          'current_location',
+                                                          lang),
+                                                      style: TextStyle(
+                                                        fontSize: 12,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        color: Colors
+                                                            .green.shade700,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(height: 4),
+                                                    Text(
+                                                      '${_currentPosition!.latitude.toStringAsFixed(6)}, ${_currentPosition!.longitude.toStringAsFixed(6)}',
+                                                      style: TextStyle(
+                                                        fontSize: 11,
+                                                        color: Colors
+                                                            .green.shade600,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ],
                                     ],
-                                  ],
+                                  ),
                                 ),
-                              ),
+                              ],
                             ],
-                          ],
                           ),
                         ),
                       ),

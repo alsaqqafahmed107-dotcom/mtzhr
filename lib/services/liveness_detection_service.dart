@@ -188,7 +188,8 @@ class PassiveLivenessSnapshot {
         requiredSignals = 7,
         totalSignals = 7,
         guidanceAr = 'ضع وجهك داخل الإطار وحافظ على نظرة طبيعية.',
-        guidanceEn = 'Place your face inside the frame and keep a natural look.';
+        guidanceEn =
+            'Place your face inside the frame and keep a natural look.';
 }
 
 class LivenessDetectionService {
@@ -239,7 +240,8 @@ class LivenessDetectionService {
   int get depthFrameCount => _depthRiskHistory.length;
   double get averageDepthSpoofRisk {
     if (_depthRiskHistory.isEmpty) return 0.5;
-    return (_depthRiskHistory.reduce((a, b) => a + b) / _depthRiskHistory.length)
+    return (_depthRiskHistory.reduce((a, b) => a + b) /
+            _depthRiskHistory.length)
         .clamp(0.0, 1.0);
   }
 
@@ -269,8 +271,8 @@ class LivenessDetectionService {
 
   void _emitProgress() {
     if (!_progressController.isClosed) {
-      _progressController
-          .add((_completedSignalKeys.length / _requiredSignals).clamp(0.0, 1.0));
+      _progressController.add(
+          (_completedSignalKeys.length / _requiredSignals).clamp(0.0, 1.0));
     }
   }
 
@@ -520,19 +522,19 @@ class LivenessDetectionService {
   }
 
   double _calculateTrackingScore(List<LivenessFrameData> recent) {
-    final centerDx = recent
-        .map((f) => (f.faceCenterX - 0.5).abs())
-        .reduce((a, b) => a + b) /
-        recent.length;
+    final centerDx =
+        recent.map((f) => (f.faceCenterX - 0.5).abs()).reduce((a, b) => a + b) /
+            recent.length;
     final centerDy = recent
-        .map((f) => (f.faceCenterY - 0.48).abs())
-        .reduce((a, b) => a + b) /
+            .map((f) => (f.faceCenterY - 0.48).abs())
+            .reduce((a, b) => a + b) /
         recent.length;
-    final areaAvg =
-        recent.map((f) => f.faceAreaRatio).reduce((a, b) => a + b) / recent.length;
+    final areaAvg = recent.map((f) => f.faceAreaRatio).reduce((a, b) => a + b) /
+        recent.length;
 
-    final centerScore = (1.0 - ((centerDx / 0.34) * 0.55) - ((centerDy / 0.30) * 0.45))
-        .clamp(0.0, 1.0);
+    final centerScore =
+        (1.0 - ((centerDx / 0.34) * 0.55) - ((centerDy / 0.30) * 0.45))
+            .clamp(0.0, 1.0);
     final sizeScore = areaAvg >= 0.05 && areaAvg <= 0.50
         ? 1.0
         : (1.0 - ((areaAvg - 0.20).abs() / 0.24)).clamp(0.0, 1.0);
@@ -542,8 +544,8 @@ class LivenessDetectionService {
   double _calculatePoseScore(List<LivenessFrameData> recent) {
     final yawAvg =
         recent.map((f) => f.yaw.abs()).reduce((a, b) => a + b) / recent.length;
-    final pitchAvg =
-        recent.map((f) => f.pitch.abs()).reduce((a, b) => a + b) / recent.length;
+    final pitchAvg = recent.map((f) => f.pitch.abs()).reduce((a, b) => a + b) /
+        recent.length;
     final yawScore = (1.0 - (yawAvg / _maxYawDegrees)).clamp(0.0, 1.0);
     final pitchScore = (1.0 - (pitchAvg / _maxPitchDegrees)).clamp(0.0, 1.0);
     return ((yawScore * 0.55) + (pitchScore * 0.45)).clamp(0.0, 1.0);
@@ -562,10 +564,8 @@ class LivenessDetectionService {
   }
 
   double _calculateBreathingScore(List<LivenessFrameData> recent) {
-    final values = recent
-        .map((f) => f.breathingSignal)
-        .where((v) => v > 0)
-        .toList();
+    final values =
+        recent.map((f) => f.breathingSignal).where((v) => v > 0).toList();
     if (values.length < 4) return 0.0;
     final std = _stdDev(values);
     final minV = values.reduce(min);
@@ -580,24 +580,26 @@ class LivenessDetectionService {
   }
 
   double _calculateTextureScore(List<LivenessFrameData> recent) {
-    final noiseAvg = recent.map((f) => f.noiseVariance).reduce((a, b) => a + b) /
-        recent.length;
-    final noiseScore = ((noiseAvg - 0.02) / 0.10).clamp(0.0, 1.0);
+    final noiseAvg =
+        recent.map((f) => f.noiseVariance).reduce((a, b) => a + b) /
+            recent.length;
+    // معايرة أخف للكاميرات الأمامية الحديثة، خاصة iPhone، بعد قياس
+    // الضوضاء من منطقة الوجه نفسها بدل أخذ عينات خام من كامل الإطار.
+    final noiseScore = ((noiseAvg - 0.006) / 0.045).clamp(0.0, 1.0);
     if (_depthRiskHistory.isEmpty) return noiseScore;
     final depthScore = 1.0 - averageDepthSpoofRisk;
     return ((depthScore * 0.7) + (noiseScore * 0.3)).clamp(0.0, 1.0);
   }
 
   double _calculateLandmarkScore(List<LivenessFrameData> recent) {
-    return recent
-            .map((f) => f.landmarkCoverage)
-            .reduce((a, b) => a + b) /
+    return recent.map((f) => f.landmarkCoverage).reduce((a, b) => a + b) /
         recent.length;
   }
 
   double _calculateSpoofRisk(List<LivenessFrameData> recent) {
     final motionAvg =
-        recent.map((f) => f.overallMotion).reduce((a, b) => a + b) / recent.length;
+        recent.map((f) => f.overallMotion).reduce((a, b) => a + b) /
+            recent.length;
     final poseAvg = _calculatePoseScore(recent);
     final eyeScore = _calculateEyeActivityScore(recent);
     final breathing = _calculateBreathingScore(recent);
@@ -605,7 +607,8 @@ class LivenessDetectionService {
     final tracking = _calculateTrackingScore(recent);
     final lowMotionPenalty = motionAvg < 0.003 ? 1.0 : 0.0;
     final blinkPenalty = eyeScore < 0.25 ? 0.8 : 0.0;
-    final depthPenalty = _depthRiskHistory.isEmpty ? 0.18 : averageDepthSpoofRisk;
+    final depthPenalty =
+        _depthRiskHistory.isEmpty ? 0.18 : averageDepthSpoofRisk;
     final risk = (lowMotionPenalty * 0.18) +
         ((1.0 - poseAvg) * 0.10) +
         (blinkPenalty * 0.10) +
@@ -764,7 +767,8 @@ class LivenessDetectionService {
     }
     return LivenessResult.failed(
       status: LivenessStatus.failed,
-      message: 'لم تكتمل جميع مؤشرات التحقق الحيوي المطلوبة بعد. حاول مرة أخرى حتى تجتاز التموضع والوضعية والعينين والتنفس والنسيج والمعالم ومقاومة الانتحال.',
+      message:
+          'لم تكتمل جميع مؤشرات التحقق الحيوي المطلوبة بعد. حاول مرة أخرى حتى تجتاز التموضع والوضعية والعينين والتنفس والنسيج والمعالم ومقاومة الانتحال.',
       spoofRisk: spoofRisk,
       failedChecks: List.unmodifiable(_failedChecks),
       passedChecks: List.unmodifiable(_passedChecks),
@@ -775,8 +779,10 @@ class LivenessDetectionService {
     return (_completedSignalKeys.length / _requiredSignals).clamp(0.0, 1.0);
   }
 
-  String getProgressTextAr() => 'جاهزية الفحص الحيوي: ${(_currentSnapshot.overallScore * 100).round()}%';
-  String getProgressTextEn() => 'Passive scan readiness: ${(_currentSnapshot.overallScore * 100).round()}%';
+  String getProgressTextAr() =>
+      'جاهزية الفحص الحيوي: ${(_currentSnapshot.overallScore * 100).round()}%';
+  String getProgressTextEn() =>
+      'Passive scan readiness: ${(_currentSnapshot.overallScore * 100).round()}%';
 
   void dispose() {
     _statusController.close();
@@ -970,8 +976,8 @@ class LivenessDetectionService {
         }
       }
       final avgEdge = edgePixels > 0 ? edgeSum / edgePixels : 15.0;
-      final edgeSmoothness = (1.0 - (avgEdge / 30.0).clamp(0.0, 1.0))
-          .clamp(0.0, 1.0);
+      final edgeSmoothness =
+          (1.0 - (avgEdge / 30.0).clamp(0.0, 1.0)).clamp(0.0, 1.0);
       final colorBandFlatness =
           bandSamples > 10 ? (bandCount / bandSamples).clamp(0.0, 1.0) : 0.5;
 
@@ -1000,9 +1006,8 @@ class LivenessDetectionService {
           }
         }
       }
-      final highFreqEnergy = hfCount > 0
-          ? (sqrt(hfSum / hfCount) / 20.0).clamp(0.0, 1.0)
-          : 0.5;
+      final highFreqEnergy =
+          hfCount > 0 ? (sqrt(hfSum / hfCount) / 20.0).clamp(0.0, 1.0) : 0.5;
 
       double skinVarSum = 0;
       int skinVarCount = 0;
