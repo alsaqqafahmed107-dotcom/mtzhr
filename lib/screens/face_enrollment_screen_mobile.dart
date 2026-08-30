@@ -238,12 +238,15 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
 
   Future<XFile?> _tryTakePictureOrNull({required int timeoutMs}) async {
     try {
-      if (_controller == null || !_controller!.value.isInitialized) return null;
-      if (_controller!.value.isStreamingImages) {
-        await _controller!.stopImageStream();
+      final controller = _controller;
+      if (controller == null || !controller.value.isInitialized) return null;
+      if (controller.value.isStreamingImages) {
+        await controller.stopImageStream();
         _streamPausedForStillCapture = true;
       }
-      return await _controller!.takePicture().timeout(Duration(milliseconds: timeoutMs));
+      return await controller.takePicture().timeout(
+        Duration(milliseconds: timeoutMs),
+      );
     } catch (_) {
       return null;
     } finally {
@@ -252,9 +255,10 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   }
 
   Future<void> _resumeImageStreamIfNeeded() async {
-    if (_controller == null || !_controller!.value.isInitialized) return;
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
     if (_captureCompleted || _isSavingToServer) return;
-    if (_streamPausedForStillCapture && !_controller!.value.isStreamingImages) {
+    if (_streamPausedForStillCapture && !controller.value.isStreamingImages) {
       try {
         await _startFrameStreaming();
       } catch (_) {
@@ -374,15 +378,16 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   }
 
   Future<void> _startFrameStreaming() async {
-    if (_controller == null ||
-        !_controller!.value.isInitialized ||
-        _controller!.value.isStreamingImages ||
+    final controller = _controller;
+    if (controller == null ||
+        !controller.value.isInitialized ||
+        controller.value.isStreamingImages ||
         _isStartingImageStream) {
       return;
     }
     _isStartingImageStream = true;
     try {
-      await _controller!.startImageStream(_processCameraImage);
+      await controller.startImageStream(_processCameraImage);
     } finally {
       _isStartingImageStream = false;
     }
@@ -396,13 +401,18 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
     if (_frameCounter % _processEveryNthFrame != 0) return;
 
     try {
+      final controller = _controller;
+      if (controller == null || !controller.value.isInitialized) {
+        return;
+      }
+
       final BytesBuilder bytesBuilder = BytesBuilder(copy: false);
       for (final Plane plane in image.planes) {
         bytesBuilder.add(plane.bytes);
       }
       final Uint8List bytes = bytesBuilder.takeBytes();
       final Size imageSize = Size(image.width.toDouble(), image.height.toDouble());
-      final camera = _controller!.description;
+      final camera = controller.description;
       final imageRotation = InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
           InputImageRotation.rotation0deg;
       final inputImageFormat = InputImageFormatValue.fromRawValue(image.format.raw) ??
@@ -580,11 +590,17 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       String fallbackUsed = 'NONE';
       try {
         final swCap = Stopwatch()..start();
-        if (_controller!.value.isStreamingImages) {
-          await _controller!.stopImageStream();
+        final activeController = _controller;
+        if (activeController == null || !activeController.value.isInitialized) {
+          throw StateError(_lang() == 'ar'
+              ? 'تم فقدان اتصال الكاميرا أثناء تسجيل الوجه. أعد فتح شاشة التسجيل.'
+              : 'Camera connection was lost during enrollment. Reopen the enrollment screen.');
+        }
+        if (activeController.value.isStreamingImages) {
+          await activeController.stopImageStream();
           _streamPausedForStillCapture = true;
         }
-        final XFile rawImage = await _controller!.takePicture().timeout(
+        final XFile rawImage = await activeController.takePicture().timeout(
           const Duration(seconds: 8),
           onTimeout: () {
             failReason = 'TIMEOUT_TAKEPICTURE_8S';

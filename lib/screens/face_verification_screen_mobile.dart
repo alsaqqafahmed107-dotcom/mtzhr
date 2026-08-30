@@ -365,14 +365,15 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   Future<XFile?> _tryTakePictureOrNull({required int timeoutMs}) async {
     try {
-      if (_controller == null || !_controller!.value.isInitialized) return null;
-      if (_controller!.value.isStreamingImages) {
-        await _controller!.stopImageStream();
+      final controller = _controller;
+      if (controller == null || !controller.value.isInitialized) return null;
+      if (controller.value.isStreamingImages) {
+        await controller.stopImageStream();
         _streamPausedForStillCapture = true;
       }
-      return await _controller!
-          .takePicture()
-          .timeout(Duration(milliseconds: timeoutMs));
+      return await controller.takePicture().timeout(
+            Duration(milliseconds: timeoutMs),
+          );
     } catch (_) {
       return null;
     } finally {
@@ -381,9 +382,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   }
 
   Future<void> _resumeImageStreamIfNeeded() async {
-    if (_controller == null || !_controller!.value.isInitialized) return;
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
     if (_verificationCaptureCompleted || _isVerifyingOnServer) return;
-    if (_streamPausedForStillCapture && !_controller!.value.isStreamingImages) {
+    if (_streamPausedForStillCapture && !controller.value.isStreamingImages) {
       try {
         await _startFrameStreaming();
       } catch (_) {
@@ -770,15 +772,16 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   }
 
   Future<void> _startFrameStreaming() async {
-    if (_controller == null ||
-        !_controller!.value.isInitialized ||
-        _controller!.value.isStreamingImages ||
+    final controller = _controller;
+    if (controller == null ||
+        !controller.value.isInitialized ||
+        controller.value.isStreamingImages ||
         _isStartingImageStream) {
       return;
     }
     _isStartingImageStream = true;
     try {
-      await _controller!.startImageStream(_processCameraImage);
+      await controller.startImageStream(_processCameraImage);
     } finally {
       _isStartingImageStream = false;
     }
@@ -797,6 +800,11 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     if (_frameCounter % _processEveryNthFrame != 0) return;
 
     try {
+      final controller = _controller;
+      if (controller == null || !controller.value.isInitialized) {
+        return;
+      }
+
       final BytesBuilder bytesBuilder = BytesBuilder(copy: false);
       for (final Plane plane in image.planes) {
         bytesBuilder.add(plane.bytes);
@@ -806,7 +814,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       final Size imageSize =
           Size(image.width.toDouble(), image.height.toDouble());
 
-      final camera = _controller!.description;
+      final camera = controller.description;
       final imageRotation =
           InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
               InputImageRotation.rotation0deg;
@@ -884,10 +892,11 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   }
 
   Future<void> _captureAndVerifyWithLiveness() async {
+    final controller = _controller;
     if (!mounted ||
         _isVerifyingOnServer ||
-        _controller == null ||
-        !_controller!.value.isInitialized) {
+        controller == null ||
+        !controller.value.isInitialized) {
       return;
     }
 
@@ -962,8 +971,14 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       String fallbackUsed = 'NONE';
       try {
         final swCap = Stopwatch()..start();
-        if (_controller!.value.isStreamingImages) {
-          await _controller!.stopImageStream();
+        final activeController = _controller;
+        if (activeController == null || !activeController.value.isInitialized) {
+          throw StateError(_lang() == 'ar'
+              ? 'تم فقدان اتصال الكاميرا أثناء التحقق. أعد فتح شاشة التحقق.'
+              : 'Camera connection was lost during verification. Reopen the verification screen.');
+        }
+        if (activeController.value.isStreamingImages) {
+          await activeController.stopImageStream();
           _streamPausedForStillCapture = true;
         }
         // #region debug-point B:take-picture-before
@@ -978,7 +993,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           },
         ));
         // #endregion
-        final XFile rawImage = await _controller!.takePicture().timeout(
+        final XFile rawImage = await activeController.takePicture().timeout(
           const Duration(seconds: 8),
           onTimeout: () {
             failReason = 'TIMEOUT_TAKEPICTURE_8S';
