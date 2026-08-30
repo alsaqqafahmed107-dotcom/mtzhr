@@ -34,7 +34,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     with WidgetsBindingObserver {
   static const bool _enableRemoteDebugTelemetry = true;
   static const String _debugEnvPath =
-      'd:\\new\\.dbg\\attendance-post-verify-fail.env';
+      'd:\\new\\.dbg\\face-verification-error.env';
   String? _debugServerUrl;
   String? _debugSessionId;
   // #region debug-point A:reporting-helper
@@ -61,7 +61,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         } catch (_) {}
       }
       final url = _debugServerUrl ?? 'http://192.168.1.163:7777/event';
-      final session = _debugSessionId ?? 'attendance-post-verify-fail';
+      final session = _debugSessionId ?? 'face-verification-error';
       final client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 2);
       final req = await client.postUrl(
@@ -175,6 +175,21 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // #region debug-point B:lifecycle-state
+    unawaited(_reportDebugEvent(
+      'B',
+      'face_verification_screen_mobile.dart:didChangeAppLifecycleState',
+      'App lifecycle state changed',
+      data: {
+        'state': state.name,
+        'controllerExists': _controller != null,
+        'controllerInitialized': _controller?.value.isInitialized ?? false,
+        'isStreamingImages': _controller?.value.isStreamingImages ?? false,
+        'isVerifyingOnServer': _isVerifyingOnServer,
+        'verificationCaptureCompleted': _verificationCaptureCompleted,
+      },
+    ));
+    // #endregion
     unawaited(_handleAppLifecycleState(state));
   }
 
@@ -710,6 +725,20 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         throw lastError ?? Exception('تعذر تهيئة الكاميرا على هذا الجهاز.');
       }
 
+      // #region debug-point B:camera-init-success
+      unawaited(_reportDebugEvent(
+        'B',
+        'face_verification_screen_mobile.dart:_initializeCamera',
+        'Camera initialized successfully',
+        data: {
+          'platform': Platform.operatingSystem,
+          'cameraName': _controller?.description.name,
+          'sensorOrientation': _controller?.description.sensorOrientation,
+          'previewSize': _controller?.value.previewSize?.toString(),
+        },
+      ));
+      // #endregion
+
       if (mounted) {
         setState(() {
           _isInitializing = false;
@@ -717,6 +746,17 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         await _startFrameStreaming();
       }
     } catch (e) {
+      // #region debug-point B:camera-init-failed
+      unawaited(_reportDebugEvent(
+        'B',
+        'face_verification_screen_mobile.dart:_initializeCamera',
+        'Camera initialization failed',
+        data: {
+          'platform': Platform.operatingSystem,
+          'error': e.toString().split('\n').first,
+        },
+      ));
+      // #endregion
       if (mounted) {
         setState(() {
           _isInitializing = false;
@@ -1108,7 +1148,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
             livenessScore: livenessResult.livenessScore,
             challengesCompleted: _livenessService.completedChallengeCount,
             spoofRisk: livenessResult.spoofRisk,
-          ).timeout(const Duration(seconds: 15));
+            timeout: const Duration(seconds: 45),
+          );
           final t5sub = swApi.elapsedMilliseconds;
           finalResult = r;
           // #region debug-point E:verify-api-result
@@ -1273,7 +1314,13 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       }
       _verificationCaptureCompleted = false;
       _verificationStartRequested = false;
-      if (e is StateError) {
+      if (e is TimeoutException) {
+        _handleFailure(
+          _lang() == 'ar'
+              ? 'استغرق الخادم وقتاً أطول من المتوقع أثناء التحقق من الوجه. تأكد أن خدمة التعرف على الوجه وواجهة الـ API تعملان ثم أعد المحاولة.'
+              : 'The server took too long while verifying the face. Make sure the face engine and API are running, then try again.',
+        );
+      } else if (e is StateError) {
         _handleFailure(e.message);
       } else {
         _handleFailure(_tParams('connection_error_with_error',
@@ -1396,6 +1443,20 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   void _handleFailure(String message) {
     if (!mounted) return;
+    // #region debug-point D:handle-failure
+    unawaited(_reportDebugEvent(
+      'D',
+      'face_verification_screen_mobile.dart:_handleFailure',
+      'Verification flow entered failure state',
+      data: {
+        'message': message,
+        'currentFaceCount': _currentFaceCount,
+        'livenessStatus': _livenessStatus.name,
+        'isVerifyingOnServer': _isVerifyingOnServer,
+        'verificationCaptureCompleted': _verificationCaptureCompleted,
+      },
+    ));
+    // #endregion
     setState(() {
       _borderColor = Colors.red;
       _statusMessage = message;
@@ -1413,6 +1474,19 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   void _resetAndStartOver() {
     if (!mounted) return;
+    // #region debug-point C:reset-start-over
+    unawaited(_reportDebugEvent(
+      'C',
+      'face_verification_screen_mobile.dart:_resetAndStartOver',
+      'Resetting verification flow to initial state',
+      data: {
+        'faceMatched': _faceMatched,
+        'currentFaceCount': _currentFaceCount,
+        'verificationCaptureCompleted': _verificationCaptureCompleted,
+        'verificationStartRequested': _verificationStartRequested,
+      },
+    ));
+    // #endregion
     setState(() {
       _isProcessing = false;
       _isVerifyingOnServer = false;

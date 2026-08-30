@@ -209,6 +209,7 @@ class FaceApiService {
     required String employeeNumber,
     required String imageBase64,
     String? deviceInfo,
+    Duration timeout = const Duration(seconds: 45),
   }) async {
     final url = ApiConfig.getFaceVerifyUrl(clientId);
     _log('👤 Verify face: Emp=$employeeNumber | Client=$clientId | طول الصورة (Base64)=${imageBase64.length ~/ 1024}KB');
@@ -225,7 +226,7 @@ class FaceApiService {
         headers: ApiConfig.headers,
         body: jsonEncode(body),
       ),
-      timeout: const Duration(seconds: 120),
+      timeout: timeout,
       maxAttempts: 2,
     );
   }
@@ -338,6 +339,7 @@ class FaceApiService {
     double? livenessScore,
     int? challengesCompleted,
     double? spoofRisk,
+    Duration timeout = const Duration(seconds: 45),
   }) async {
     final url = ApiConfig.getVerifyFaceWithStoredImageUrl(clientId);
     _log('👤 [NEW FLOW] Verify Face (with Stored Image + Liveness): Emp=$employeeNumber | Client=$clientId | حجم الصورة=${imageBase64.length ~/ 1024}KB | Liveness=${livenessScore?.toStringAsFixed(2) ?? "N/A"}');
@@ -359,7 +361,7 @@ class FaceApiService {
         headers: ApiConfig.headers,
         body: jsonEncode(body),
       ),
-      timeout: const Duration(seconds: 120),
+      timeout: timeout,
       maxAttempts: 2,
     );
 
@@ -371,6 +373,7 @@ class FaceApiService {
         employeeNumber: employeeNumber,
         imageBase64: imageBase64,
         deviceInfo: deviceInfo,
+        timeout: timeout,
       );
     }
     return newResult;
