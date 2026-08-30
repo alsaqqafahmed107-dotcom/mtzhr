@@ -1,16 +1,38 @@
 workflows:
-  flutter-release:
-    name: Flutter Android & iOS Build
+  ios-release:
+    name: iOS Release Build
     environment:
       flutter: stable
       xcode: latest
     scripts:
       - name: Get dependencies
         script: flutter pub get
-      - name: Build APK
-        script: flutter build apk --release
-      - name: Build iOS (no codesign)
+      - name: Build iOS release for device
         script: flutter build ios --release --no-codesign
     artifacts:
-      - build/app/outputs/flutter-apk/app-release.apk
       - build/ios/iphoneos/*.app
+
+  android-release:
+    name: Android Release Build
+    environment:
+      flutter: stable
+    scripts:
+      - name: Get dependencies
+        script: flutter pub get
+      - name: Build APK
+        script: flutter build apk --release
+    artifacts:
+      - build/app/outputs/flutter-apk/app-release.apk
+
+  ios-simulator-debug:
+    name: iOS Simulator Debug Build
+    environment:
+      flutter: stable
+      xcode: latest
+    scripts:
+      - name: Get dependencies
+        script: flutter pub get
+      - name: Build iOS simulator debug
+        script: flutter build ios --debug --simulator
+    artifacts:
+      - build/ios/iphonesimulator/*.app
