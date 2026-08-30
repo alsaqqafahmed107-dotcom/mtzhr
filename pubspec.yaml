@@ -111,13 +111,15 @@ dev_dependencies:
   
   # Flutter Launcher Icons for generating app icons
   flutter_launcher_icons: ^0.13.1
-  flutter_native_splash: ^2.3.10
+  flutter_native_splash: ^2.4.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
 # The following section is specific to Flutter packages.
 flutter:
+  config:
+    enable-swift-package-manager: false
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
