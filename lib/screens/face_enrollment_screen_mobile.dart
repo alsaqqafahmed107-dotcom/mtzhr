@@ -194,7 +194,9 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   // 📸 نظام التقاط الاستباقي لصور JPG (Fallback)
   // =========================================================
   void _startProactiveCaptureLoop() {
-    _proactiveCaptureTimer = Timer.periodic(const Duration(milliseconds: 3000), (timer) async {
+    _proactiveCaptureTimer = Timer.periodic(
+      Duration(milliseconds: Platform.isIOS ? 1800 : 3000),
+      (timer) async {
       if (!mounted ||
           _isInitializing ||
           _isProcessing ||
@@ -584,11 +586,22 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
 
     try {
       // ----------------------------------------------------
-      // المرحلة 1: التقاط الصورة (3 طبقات احتياطية)
+      // المرحلة 1: التقاط الصورة بشكل متوافق مع iPhone/Android
+      // نستخدم JPEG حقيقية فقط، ونفضل JPEG الاستباقية على iPhone.
       // ----------------------------------------------------
       phase = 'CAPTURE_IMAGE';
       String fallbackUsed = 'NONE';
       try {
+        if (Platform.isIOS &&
+            _lastProactiveCapturedJpg != null &&
+            _lastProactiveCapturedFace != null) {
+          finalImageBytes = _lastProactiveCapturedJpg!;
+          finalFace = _lastProactiveCapturedFace!;
+          fallbackUsed = 'IOS_PROACTIVE_JPG_PRIMARY';
+          if (kDebugMode) {
+            print('💾 [$tid] PHASE 1A OK: استخدام JPEG استباقية كأساس على iPhone');
+          }
+        } else {
         final swCap = Stopwatch()..start();
         final activeController = _controller;
         if (activeController == null || !activeController.value.isInitialized) {
@@ -625,6 +638,7 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
           failReason = 'NO_FACE_IN_CAPTURED';
           throw Exception('لا يوجد وجه → Fallback JPG.');
         }
+        }
       } catch (capErr) {
         if (kDebugMode) print('💾 [$tid] ⚠️ المرحلة 1A فشلت: $capErr');
         if (_lastProactiveCapturedJpg != null && _lastProactiveCapturedFace != null) {
@@ -632,13 +646,10 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
           finalFace = _lastProactiveCapturedFace!;
           fallbackUsed = 'PROACTIVE_JPG';
           if (kDebugMode) print('💾 [$tid] PHASE 1B OK: Fallback → JPG استباقي (${finalImageBytes!.length ~/ 1024}KB)');
-        } else if (_lastValidFrameBytes != null && _lastValidFace != null) {
-          finalImageBytes = _lastValidFrameBytes!;
-          finalFace = _lastValidFace!;
-          fallbackUsed = 'RAW_FRAME_LAST_RESORT';
-          if (kDebugMode) print('💾 [$tid] PHASE 1C ⚠️ Fallback → RAW NV21 (خطة أخيرة!)');
         } else {
-          rethrow;
+          throw StateError(_lang() == 'ar'
+              ? 'تعذر الحصول على صورة وجه صالحة من الكاميرا. أعد المحاولة مع إبقاء الوجه ثابتاً داخل الإطار.'
+              : 'Unable to obtain a valid face image from the camera. Try again while keeping your face steady inside the frame.');
         }
       }
       if (finalImageBytes == null || finalFace == null) {
@@ -673,6 +684,7 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
         // "String or binary data would be truncated".
         'captureTimestamp': DateTime.now().toIso8601String(),
         'imageSource': fallbackUsed,
+        'platform': Platform.operatingSystem,
         'consentApproved': true,
         'retentionYears': 5,
         'flowVersion': 'ENROLL_V1',

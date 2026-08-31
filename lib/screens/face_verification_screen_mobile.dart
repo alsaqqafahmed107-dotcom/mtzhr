@@ -315,7 +315,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   // ⚡ إصلاح 2: نظام التقاط الاستباقي (نفس منطق التسجيل)
   void _startProactiveCaptureLoop() {
     _proactiveCaptureTimer =
-        Timer.periodic(const Duration(milliseconds: 3000), (timer) async {
+        Timer.periodic(
+            Duration(milliseconds: Platform.isIOS ? 1800 : 3000),
+            (timer) async {
       if (!mounted ||
           _isInitializing ||
           _isProcessing ||
@@ -966,10 +968,23 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         print(
             '⚡ [VERIFY-PERF] (${t1}ms) PHASE 1 OK: Liveness ناجحة | score=${livenessResult.livenessScore.toStringAsFixed(2)} | passed=${livenessResult.passedChecks.length}');
 
-      // 🔍 المرحلة 2: التقاط الصورة أو Fallback (3 طبقات: takePicture → Pre-capture JPG → آخر RAW)
+      // 🔍 المرحلة 2: التقاط الصورة أو Fallback بشكل متوافق مع iPhone/Android.
+      // على iPhone نفضل JPEG الاستباقية أولاً لأنها أكثر استقراراً من إيقاف البث ثم takePicture.
+      // ولا نرسل RAW frames إلى الخادم لأنها ليست صورة JPEG/PNG فعلية وقد تفشل المطابقة.
       phase = 'CAPTURE_IMAGE';
       String fallbackUsed = 'NONE';
       try {
+        if (Platform.isIOS &&
+            _lastProactiveCapturedJpg != null &&
+            _lastProactiveCapturedFace != null) {
+          finalImageBytes = _lastProactiveCapturedJpg!;
+          finalFace = _lastProactiveCapturedFace!;
+          fallbackUsed = 'IOS_PROACTIVE_JPG_PRIMARY';
+          if (kDebugMode) {
+            print(
+                '⚡ [VERIFY-PERF] استخدام JPEG استباقية كأساس على iPhone (${finalImageBytes!.length ~/ 1024}KB)');
+          }
+        } else {
         final swCap = Stopwatch()..start();
         final activeController = _controller;
         if (activeController == null || !activeController.value.isInitialized) {
@@ -1042,6 +1057,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
               ? 'لم يتم اكتشاف وجه في الصورة الملتقطة. يرجى الوقوف أمام الكاميرا بشكل صحيح.'
               : 'No face detected in the captured image.');
         }
+        }
       } on StateError {
         rethrow;
       } catch (capErr) {
@@ -1072,17 +1088,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
             print(
                 '⚡ [VERIFY-PERF] (${t2fb1}ms) PHASE 2B OK: Fallback 1 → صورة JPG استباقية (حجم=${finalImageBytes!.length ~/ 1024}KB) ✅');
         }
-        // ⚡ Fallback 2: آخر إطار RAW كخطة أخيرة
-        else if (_lastValidFrameBytes != null && _lastValidFace != null) {
-          final t2fb2 = DateTime.now().difference(perfTrace).inMilliseconds;
-          finalImageBytes = _lastValidFrameBytes!;
-          finalFace = _lastValidFace!;
-          fallbackUsed = 'RAW_FRAME_LAST_RESORT';
-          if (kDebugMode)
-            print(
-                '⚡ [VERIFY-PERF] (${t2fb2}ms) PHASE 2C ⚠️ Fallback 2 → إطار RAW (خطة أخيرة) ⚠️');
-        } else {
-          rethrow;
+        else {
+          throw StateError(_lang() == 'ar'
+              ? 'تعذر الحصول على صورة وجه صالحة من الكاميرا. أعد المحاولة مع إبقاء الوجه ثابتاً داخل الإطار.'
+              : 'Unable to obtain a valid face image from the camera. Try again while keeping your face steady inside the frame.');
         }
       }
       if (finalImageBytes == null || finalFace == null)
@@ -1132,6 +1141,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         // ⚡ معلومات مصدر الصورة للتشخيص
         'imageSource': fallbackUsed,
         'capturedFallbackUsed': fallbackUsed != 'DIRECT',
+        'platform': Platform.operatingSystem,
       };
       final t4 = DateTime.now().difference(perfTrace).inMilliseconds;
       if (kDebugMode) {
