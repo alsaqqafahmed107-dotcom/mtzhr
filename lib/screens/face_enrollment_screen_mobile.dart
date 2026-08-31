@@ -36,6 +36,56 @@ class FaceEnrollmentScreen extends StatefulWidget {
 
 class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
     with WidgetsBindingObserver {
+  static const bool _enableRemoteDebugTelemetry = true;
+  static const String _debugEnvPath = 'd:\\new\\.dbg\\face-detection-fail.env';
+  String? _debugServerUrl;
+  String? _debugSessionId;
+  // #region debug-point A:reporting-helper
+  Future<void> _reportDebugEvent(
+    String hypothesisId,
+    String location,
+    String msg, {
+    Map<String, dynamic>? data,
+  }) async {
+    if (!_enableRemoteDebugTelemetry) return;
+    try {
+      if (_debugServerUrl == null || _debugSessionId == null) {
+        try {
+          final envText = await File(_debugEnvPath).readAsString();
+          for (final line in envText.split('\n')) {
+            if (line.startsWith('DEBUG_SERVER_URL=')) {
+              _debugServerUrl =
+                  line.substring('DEBUG_SERVER_URL='.length).trim();
+            } else if (line.startsWith('DEBUG_SESSION_ID=')) {
+              _debugSessionId =
+                  line.substring('DEBUG_SESSION_ID='.length).trim();
+            }
+          }
+        } catch (_) {}
+      }
+      final url = _debugServerUrl ?? 'http://192.168.1.163:7777/event';
+      final session = _debugSessionId ?? 'face-detection-fail';
+      final client = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 2);
+      final req = await client.postUrl(Uri.parse(url));
+      req.headers.contentType = ContentType.json;
+      req.write(jsonEncode({
+        'sessionId': session,
+        'runId': 'pre-fix',
+        'hypothesisId': hypothesisId,
+        'location': location,
+        'msg': '[DEBUG] $msg',
+        'data': data ?? const {},
+        'ts': DateTime.now().millisecondsSinceEpoch,
+        'traceId':
+            '${widget.employeeNumber}-${DateTime.now().microsecondsSinceEpoch}',
+      }));
+      await (await req.close()).drain<void>();
+      client.close(force: true);
+    } catch (_) {}
+  }
+  // #endregion
+
   CameraController? _controller;
   bool _isInitializing = true;
   bool _isProcessing = false;
@@ -44,7 +94,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   String _instructionMessage = '';
   String _poseHintMessage = '';
   Color _borderColor = Colors.white.withOpacity(0.5);
-  double _progressValue = 0.0; // النسبة المئوية لاستقرار وضع الوجه قبل التصوير التلقائي
+  double _progressValue =
+      0.0; // النسبة المئوية لاستقرار وضع الوجه قبل التصوير التلقائي
   bool _completedSuccessfully = false;
 
   // ⚡ تتبع وقت بدء الجلسة لحساب المدة بشكل صحيح
@@ -71,13 +122,15 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   bool _isFaceCurrentlyDetected = false;
   int _frameCounter = 0;
   static const int _processEveryNthFrame = 3;
+  int _lastTelemetryFaceCount = -999;
   bool _isStartingImageStream = false;
   bool _streamPausedForStillCapture = false;
 
   // حالة التثبيت قبل التصوير التلقائي:
   Timer? _stabilizationTimer;
   int _goodPoseFramesCount = 0;
-  static const int _requiredGoodFrames = 10; // ~10 إطارات جيدة متتالية قبل التصوير (تقريباً 1-2 ثانية)
+  static const int _requiredGoodFrames =
+      10; // ~10 إطارات جيدة متتالية قبل التصوير (تقريباً 1-2 ثانية)
   bool _autoCaptureInProgress = false;
 
   // تخزين آخر إطار وجه صالح للـ Fallback:
@@ -86,6 +139,14 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   InputImageRotation? _lastValidFrameRotation;
   Face? _lastValidFace;
   bool _captureCompleted = false;
+  int _noFaceGraceStreak = 0;
+
+  static const Map<DeviceOrientation, int> _cameraOrientationMap = {
+    DeviceOrientation.portraitUp: 0,
+    DeviceOrientation.landscapeLeft: 90,
+    DeviceOrientation.portraitDown: 180,
+    DeviceOrientation.landscapeRight: 270,
+  };
 
   // معلومات جودة الوجه الحالية (للملاحظات في الـ UI):
   double _currentHeadY = 0;
@@ -97,11 +158,13 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    final lang =
-        Provider.of<LanguageService>(context, listen: false).currentLocale.languageCode;
+    final lang = Provider.of<LanguageService>(context, listen: false)
+        .currentLocale
+        .languageCode;
     _statusMessage = Translations.getText('face_point_to_camera', lang);
-    _instructionMessage = Translations.getText('face_enrollment_instruction_simple', lang)
-        ?? 'سيتم التقاط صورة لوجهك تلقائياً عندما يكون وضعك مناسباً. لا تحتاج لفعل أي حركات.';
+    _instructionMessage = Translations.getText(
+            'face_enrollment_instruction_simple', lang) ??
+        'سيتم التقاط صورة لوجهك تلقائياً عندما يكون وضعك مناسباً. لا تحتاج لفعل أي حركات.';
     _poseHintMessage = '';
     _initializeCamera();
     _startProactiveCaptureLoop();
@@ -195,8 +258,7 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   // =========================================================
   void _startProactiveCaptureLoop() {
     _proactiveCaptureTimer = Timer.periodic(
-      Duration(milliseconds: Platform.isIOS ? 1800 : 3000),
-      (timer) async {
+        Duration(milliseconds: Platform.isIOS ? 1800 : 3000), (timer) async {
       if (!mounted ||
           _isInitializing ||
           _isProcessing ||
@@ -222,20 +284,53 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
     if (_controller == null || !_controller!.value.isInitialized) return;
     final XFile? img = await _tryTakePictureOrNull(timeoutMs: 2200);
     if (img == null) return;
-    final bytes = await File(img.path).readAsBytes().timeout(const Duration(milliseconds: 1500));
+    final bytes = await File(img.path)
+        .readAsBytes()
+        .timeout(const Duration(milliseconds: 1500));
     final inputImage = InputImage.fromFilePath(img.path);
-    final faces = await _faceDetector.processImage(inputImage).timeout(const Duration(milliseconds: 2000));
+    final faces = await _faceDetector
+        .processImage(inputImage)
+        .timeout(const Duration(milliseconds: 2000));
     if (faces.isNotEmpty) {
       if (faces.length > 1) {
         faces.sort((a, b) => (b.boundingBox.width * b.boundingBox.height)
             .compareTo(a.boundingBox.width * a.boundingBox.height));
       }
       if (kDebugMode) {
-        print('📸 [Enroll-Proactive] ✅ تم التقاط صورة JPG احتياطية بحجم ${bytes.length ~/ 1024}KB');
+        print(
+            '📸 [Enroll-Proactive] ✅ تم التقاط صورة JPG احتياطية بحجم ${bytes.length ~/ 1024}KB');
       }
       _lastProactiveCapturedJpg = bytes;
       _lastProactiveCapturedFace = faces.first;
     }
+  }
+
+  Future<bool> _ensureFreshIosProactiveCapture({int attempts = 2}) async {
+    if (!Platform.isIOS) {
+      return _lastProactiveCapturedJpg != null &&
+          _lastProactiveCapturedFace != null;
+    }
+
+    for (int attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        await _runProactiveCaptureOnce();
+      } catch (_) {}
+
+      if (_lastProactiveCapturedJpg != null &&
+          _lastProactiveCapturedFace != null) {
+        if (kDebugMode) {
+          print(
+              '📸 [Enroll-iPhone] تم تجهيز JPG نهائية صالحة قبل الحفظ (attempt=$attempt/$attempts)');
+        }
+        return true;
+      }
+
+      if (attempt < attempts) {
+        await Future.delayed(const Duration(milliseconds: 180));
+      }
+    }
+
+    return false;
   }
 
   Future<XFile?> _tryTakePictureOrNull({required int timeoutMs}) async {
@@ -247,8 +342,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
         _streamPausedForStillCapture = true;
       }
       return await controller.takePicture().timeout(
-        Duration(milliseconds: timeoutMs),
-      );
+            Duration(milliseconds: timeoutMs),
+          );
     } catch (_) {
       return null;
     } finally {
@@ -273,8 +368,9 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   // =========================================================
   // 🎯 دوال مساعدة للترجمات والتنقل
   // =========================================================
-  String _lang() =>
-      Provider.of<LanguageService>(context, listen: false).currentLocale.languageCode;
+  String _lang() => Provider.of<LanguageService>(context, listen: false)
+      .currentLocale
+      .languageCode;
 
   String _t(String key) => Translations.getText(key, _lang());
 
@@ -286,9 +382,12 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
     if (result['Success'] == true) return true;
     if (result['success'] == true) return true;
     if (result['SUCCESS'] == true) return true;
-    final s = (result['Status'] ?? result['status'] ?? '').toString().toLowerCase();
+    final s =
+        (result['Status'] ?? result['status'] ?? '').toString().toLowerCase();
     if (s == 'ready' || s == 'success' || s == 'ok') return true;
-    if (result['Enrolled'] == true || result['Registered'] == true || result['Saved'] == true) return true;
+    if (result['Enrolled'] == true ||
+        result['Registered'] == true ||
+        result['Saved'] == true) return true;
     return false;
   }
 
@@ -304,7 +403,9 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
         SystemNavigator.pop();
       }
     } catch (e) {
-      if (kDebugMode) print('🚪 [Enrollment-SmartClose] استثناء: $e (الاعتماد على Global Flag).');
+      if (kDebugMode)
+        print(
+            '🚪 [Enrollment-SmartClose] استثناء: $e (الاعتماد على Global Flag).');
     }
   }
 
@@ -323,8 +424,11 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
 
       final attempts = <({ResolutionPreset preset, ImageFormatGroup? format})>[
         (
-          preset: Platform.isIOS ? ResolutionPreset.high : ResolutionPreset.medium,
-          format: Platform.isAndroid ? ImageFormatGroup.nv21 : ImageFormatGroup.bgra8888,
+          preset:
+              Platform.isIOS ? ResolutionPreset.high : ResolutionPreset.medium,
+          format: Platform.isAndroid
+              ? ImageFormatGroup.nv21
+              : ImageFormatGroup.bgra8888,
         ),
         (
           preset: ResolutionPreset.medium,
@@ -372,7 +476,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       if (mounted) {
         setState(() {
           _isInitializing = false;
-          _statusMessage = _tParams('camera_start_error_with_error', {'error': e.toString()});
+          _statusMessage = _tParams(
+              'camera_start_error_with_error', {'error': e.toString()});
           _borderColor = Colors.red;
         });
       }
@@ -395,6 +500,118 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
     }
   }
 
+  Future<
+          ({
+            InputImage inputImage,
+            InputImageRotation rotation,
+            InputImageFormat format,
+            int bytesPerRow,
+          })?>
+      _buildMlKitInput(CameraImage image, CameraController controller) async {
+    final camera = controller.description;
+    final imageSize = Size(image.width.toDouble(), image.height.toDouble());
+
+    InputImageRotation? rotation;
+    if (Platform.isIOS) {
+      rotation =
+          InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
+              InputImageRotation.rotation0deg;
+    } else {
+      final deviceRotation =
+          _cameraOrientationMap[controller.value.deviceOrientation];
+      if (deviceRotation == null) {
+        return null;
+      }
+      final adjustedRotation = camera.lensDirection == CameraLensDirection.front
+          ? (camera.sensorOrientation + deviceRotation) % 360
+          : (camera.sensorOrientation - deviceRotation + 360) % 360;
+      rotation = InputImageRotationValue.fromRawValue(adjustedRotation);
+      if (rotation == null) {
+        return null;
+      }
+    }
+
+    final inputImageFormat =
+        InputImageFormatValue.fromRawValue(image.format.raw);
+    if (inputImageFormat == null) {
+      return null;
+    }
+
+    if (Platform.isIOS && inputImageFormat != InputImageFormat.bgra8888) {
+      return null;
+    }
+
+    late final Uint8List imageBytes;
+    late final InputImageFormat effectiveFormat;
+    late final int bytesPerRow;
+
+    if (Platform.isAndroid) {
+      if (image.planes.length == 1 &&
+          inputImageFormat == InputImageFormat.nv21) {
+        imageBytes = image.planes.first.bytes;
+        effectiveFormat = InputImageFormat.nv21;
+        bytesPerRow = image.width;
+      } else if (image.planes.length == 3) {
+        imageBytes = _convertYuv420ToNv21(image);
+        effectiveFormat = InputImageFormat.nv21;
+        bytesPerRow = image.width;
+      } else {
+        return null;
+      }
+    } else {
+      if (image.planes.length != 1) {
+        return null;
+      }
+      imageBytes = image.planes.first.bytes;
+      effectiveFormat = inputImageFormat;
+      bytesPerRow = image.planes.first.bytesPerRow;
+    }
+
+    final metadata = InputImageMetadata(
+      size: imageSize,
+      rotation: rotation,
+      format: effectiveFormat,
+      bytesPerRow: bytesPerRow,
+    );
+
+    return (
+      inputImage: InputImage.fromBytes(bytes: imageBytes, metadata: metadata),
+      rotation: rotation,
+      format: effectiveFormat,
+      bytesPerRow: bytesPerRow,
+    );
+  }
+
+  Uint8List _convertYuv420ToNv21(CameraImage image) {
+    final width = image.width;
+    final height = image.height;
+    final yPlane = image.planes[0];
+    final uPlane = image.planes[1];
+    final vPlane = image.planes[2];
+    final nv21 = Uint8List(width * height + (width * height ~/ 2));
+    var index = 0;
+
+    for (var row = 0; row < height; row++) {
+      final rowStart = row * yPlane.bytesPerRow;
+      nv21.setRange(index, index + width, yPlane.bytes, rowStart);
+      index += width;
+    }
+
+    final uPixelStride = uPlane.bytesPerPixel ?? 1;
+    final vPixelStride = vPlane.bytesPerPixel ?? 1;
+
+    for (var row = 0; row < height ~/ 2; row++) {
+      final uRowStart = row * uPlane.bytesPerRow;
+      final vRowStart = row * vPlane.bytesPerRow;
+      for (var col = 0; col < width ~/ 2; col++) {
+        nv21[index++] = vPlane.bytes[vRowStart + col * vPixelStride];
+        nv21[index++] = uPlane.bytes[uRowStart + col * uPixelStride];
+      }
+    }
+
+    return nv21;
+  }
+
   // 🔄 معالجة الإطار الواحد (بدون أي فحص Liveness - فقط كشف وجه + تحقق من الوضع)
   Future<void> _processCameraImage(CameraImage image) async {
     if (!mounted || _captureCompleted) return;
@@ -408,24 +625,39 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
         return;
       }
 
-      final BytesBuilder bytesBuilder = BytesBuilder(copy: false);
-      for (final Plane plane in image.planes) {
-        bytesBuilder.add(plane.bytes);
+      final built = await _buildMlKitInput(image, controller);
+      if (built == null) {
+        if (_frameCounter % 45 == 0) {
+          // #region debug-point B:stream-input-unsupported
+          unawaited(_reportDebugEvent(
+            'B',
+            'face_enrollment_screen_mobile.dart:_processCameraImage',
+            'Skipped live frame because ML Kit input was unsupported',
+            data: {
+              'platform': Platform.operatingSystem,
+              'cameraName': controller.description.name,
+              'lensDirection': controller.description.lensDirection.name,
+              'sensorOrientation': controller.description.sensorOrientation,
+              'deviceOrientation': controller.value.deviceOrientation.name,
+              'imageWidth': image.width,
+              'imageHeight': image.height,
+              'planesLength': image.planes.length,
+              'formatRaw': image.format.raw,
+            },
+          ));
+          // #endregion
+        }
+        return;
       }
-      final Uint8List bytes = bytesBuilder.takeBytes();
-      final Size imageSize = Size(image.width.toDouble(), image.height.toDouble());
-      final camera = controller.description;
-      final imageRotation = InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
-          InputImageRotation.rotation0deg;
-      final inputImageFormat = InputImageFormatValue.fromRawValue(image.format.raw) ??
-          (Platform.isAndroid ? InputImageFormat.nv21 : InputImageFormat.bgra8888);
-      final int bytesPerRow = image.planes.isNotEmpty ? image.planes.first.bytesPerRow : 0;
-      final inputImageMetadata = InputImageMetadata(
-        size: imageSize, rotation: imageRotation, format: inputImageFormat, bytesPerRow: bytesPerRow,
-      );
 
-      final inputImage = InputImage.fromBytes(bytes: bytes, metadata: inputImageMetadata);
-      final faces = await _faceDetector.processImage(inputImage);
+      final Size imageSize =
+          Size(image.width.toDouble(), image.height.toDouble());
+      final camera = controller.description;
+      final imageRotation = built.rotation;
+      final inputImageFormat = built.format;
+      final int bytesPerRow = built.bytesPerRow;
+      final Uint8List singlePlaneBytes = image.planes.first.bytes;
+      final faces = await _faceDetector.processImage(built.inputImage);
 
       Face? currentFace;
       if (faces.isNotEmpty) {
@@ -434,10 +666,49 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
               .compareTo(a.boundingBox.width * a.boundingBox.height));
         }
         currentFace = faces.first;
-        _lastValidFrameBytes = bytes;
+        _noFaceGraceStreak = 0;
+        _lastValidFrameBytes = singlePlaneBytes;
         _lastValidFrameSize = imageSize;
         _lastValidFrameRotation = imageRotation;
         _lastValidFace = currentFace;
+      } else if (_lastValidFace != null && _noFaceGraceStreak < 2) {
+        _noFaceGraceStreak++;
+        currentFace = _lastValidFace;
+      } else {
+        _noFaceGraceStreak = 0;
+        _lastValidFrameBytes = null;
+        _lastValidFrameSize = null;
+        _lastValidFrameRotation = null;
+        _lastValidFace = null;
+      }
+
+      final faceCount = currentFace != null ? 1 : faces.length;
+      if (faceCount != _lastTelemetryFaceCount || _frameCounter % 45 == 0) {
+        _lastTelemetryFaceCount = faceCount;
+        // #region debug-point A:stream-face-detection
+        unawaited(_reportDebugEvent(
+          'A',
+          'face_enrollment_screen_mobile.dart:_processCameraImage',
+          'Processed live camera frame for enrollment detection',
+          data: {
+            'platform': Platform.operatingSystem,
+            'cameraName': camera.name,
+            'lensDirection': camera.lensDirection.name,
+            'sensorOrientation': camera.sensorOrientation,
+            'deviceOrientation': controller.value.deviceOrientation.name,
+            'imageWidth': image.width,
+            'imageHeight': image.height,
+            'planesLength': image.planes.length,
+            'formatRaw': image.format.raw,
+            'inputImageFormat': inputImageFormat.name,
+            'bytesPerRow': bytesPerRow,
+            'faceCount': faceCount,
+            'hasCurrentFace': currentFace != null,
+            'boundingBoxWidth': currentFace?.boundingBox.width,
+            'boundingBoxHeight': currentFace?.boundingBox.height,
+          },
+        ));
+        // #endregion
       }
 
       // تحديث الحالات:
@@ -454,19 +725,23 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       // ✅ تحقق من صحة وضع الوجه (الزوايا + العيون):
       final bool isPoseValid = _validateFacePoseForEnrollment(currentFace);
       if (kDebugMode && _frameCounter % 30 == 0) {
-        print('🎥 [Enroll-Frame] وجه=$_isFaceCurrentlyDetected | poseValid=$isPoseValid | X=${_currentHeadX.toStringAsFixed(1)}° Y=${_currentHeadY.toStringAsFixed(1)}° | L-eye=${_currentLeftEyeOpen.toStringAsFixed(2)}');
+        print(
+            '🎥 [Enroll-Frame] وجه=$_isFaceCurrentlyDetected | poseValid=$isPoseValid | X=${_currentHeadX.toStringAsFixed(1)}° Y=${_currentHeadY.toStringAsFixed(1)}° | L-eye=${_currentLeftEyeOpen.toStringAsFixed(2)}');
       }
 
       // 🎯 منطق التصوير التلقائي عند استقرار الوضع الجيد:
       if (!_autoCaptureInProgress && !_isProcessing && !_isSavingToServer) {
         if (_isFaceCurrentlyDetected && isPoseValid) {
-          _goodPoseFramesCount = (_goodPoseFramesCount + 1).clamp(0, _requiredGoodFrames * 2);
+          _goodPoseFramesCount =
+              (_goodPoseFramesCount + 1).clamp(0, _requiredGoodFrames * 2);
           // بدء مؤقت التثبيت عند أول إطار جيد:
           if (_stabilizationTimer == null || !_stabilizationTimer!.isActive) {
             _stabilizationTimer = Timer(const Duration(milliseconds: 1200), () {
               if (!mounted || _autoCaptureInProgress) return;
               if (_goodPoseFramesCount >= _requiredGoodFrames ~/ 2) {
-                if (kDebugMode) print('🎯 [Auto-Capture] تم استقرار الوضع → بدء التصوير التلقائي!');
+                if (kDebugMode)
+                  print(
+                      '🎯 [Auto-Capture] تم استقرار الوضع → بدء التصوير التلقائي!');
                 _manualOrAutoCapture();
               }
             });
@@ -533,11 +808,14 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       } else {
         newHint = '✅ ممتاز! ابقى ثابتاً للحظة...';
         newBorder = Colors.green;
-        newProgress = (_goodPoseFramesCount / _requiredGoodFrames).clamp(0.0, 1.0);
+        newProgress =
+            (_goodPoseFramesCount / _requiredGoodFrames).clamp(0.0, 1.0);
       }
     }
 
-    if (newHint != _poseHintMessage || newBorder != _borderColor || newProgress != _progressValue) {
+    if (newHint != _poseHintMessage ||
+        newBorder != _borderColor ||
+        newProgress != _progressValue) {
       setState(() {
         _poseHintMessage = newHint;
         _borderColor = newBorder;
@@ -570,7 +848,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
     int saveAttempt = 0;
     if (kDebugMode) {
       print('💾 [ENROLL-SAVE-$tid] ════════════════════════════════════');
-      print('💾 [ENROLL-SAVE-$tid] بدء حفظ صورة الوجه في جدول Users_Employees | Emp=${widget.employeeNumber}');
+      print(
+          '💾 [ENROLL-SAVE-$tid] بدء حفظ صورة الوجه في جدول Users_Employees | Emp=${widget.employeeNumber}');
       print('💾 [ENROLL-SAVE-$tid] ════════════════════════════════════');
     }
 
@@ -592,6 +871,9 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       phase = 'CAPTURE_IMAGE';
       String fallbackUsed = 'NONE';
       try {
+        if (Platform.isIOS) {
+          await _ensureFreshIosProactiveCapture();
+        }
         if (Platform.isIOS &&
             _lastProactiveCapturedJpg != null &&
             _lastProactiveCapturedFace != null) {
@@ -599,53 +881,64 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
           finalFace = _lastProactiveCapturedFace!;
           fallbackUsed = 'IOS_PROACTIVE_JPG_PRIMARY';
           if (kDebugMode) {
-            print('💾 [$tid] PHASE 1A OK: استخدام JPEG استباقية كأساس على iPhone');
+            print(
+                '💾 [$tid] PHASE 1A OK: استخدام JPEG استباقية كأساس على iPhone');
           }
         } else {
-        final swCap = Stopwatch()..start();
-        final activeController = _controller;
-        if (activeController == null || !activeController.value.isInitialized) {
-          throw StateError(_lang() == 'ar'
-              ? 'تم فقدان اتصال الكاميرا أثناء تسجيل الوجه. أعد فتح شاشة التسجيل.'
-              : 'Camera connection was lost during enrollment. Reopen the enrollment screen.');
-        }
-        if (activeController.value.isStreamingImages) {
-          await activeController.stopImageStream();
-          _streamPausedForStillCapture = true;
-        }
-        final XFile rawImage = await activeController.takePicture().timeout(
-          const Duration(seconds: 8),
-          onTimeout: () {
-            failReason = 'TIMEOUT_TAKEPICTURE_8S';
-            throw TimeoutException('مهلة التقاط الصورة انتهت → استخدام آخر صورة JPG محفوظة.');
-          },
-        );
-        final bytesXFile = await File(rawImage.path).readAsBytes().timeout(const Duration(seconds: 4));
-        final inputImage = InputImage.fromFilePath(rawImage.path);
-        final faces = await _faceDetector.processImage(inputImage).timeout(const Duration(seconds: 6));
-        final t2 = swCap.elapsedMilliseconds;
+          final swCap = Stopwatch()..start();
+          final activeController = _controller;
+          if (activeController == null ||
+              !activeController.value.isInitialized) {
+            throw StateError(_lang() == 'ar'
+                ? 'تم فقدان اتصال الكاميرا أثناء تسجيل الوجه. أعد فتح شاشة التسجيل.'
+                : 'Camera connection was lost during enrollment. Reopen the enrollment screen.');
+          }
+          if (activeController.value.isStreamingImages) {
+            await activeController.stopImageStream();
+            _streamPausedForStillCapture = true;
+          }
+          final XFile rawImage = await activeController.takePicture().timeout(
+            const Duration(seconds: 8),
+            onTimeout: () {
+              failReason = 'TIMEOUT_TAKEPICTURE_8S';
+              throw TimeoutException(
+                  'مهلة التقاط الصورة انتهت → استخدام آخر صورة JPG محفوظة.');
+            },
+          );
+          final bytesXFile = await File(rawImage.path)
+              .readAsBytes()
+              .timeout(const Duration(seconds: 4));
+          final inputImage = InputImage.fromFilePath(rawImage.path);
+          final faces = await _faceDetector
+              .processImage(inputImage)
+              .timeout(const Duration(seconds: 6));
+          final t2 = swCap.elapsedMilliseconds;
 
-        if (faces.isNotEmpty) {
-          if (faces.length > 1) {
-            faces.sort((a, b) => (b.boundingBox.width * b.boundingBox.height)
-                .compareTo(a.boundingBox.width * a.boundingBox.height));
+          if (faces.isNotEmpty) {
+            if (faces.length > 1) {
+              faces.sort((a, b) => (b.boundingBox.width * b.boundingBox.height)
+                  .compareTo(a.boundingBox.width * a.boundingBox.height));
+            }
+            finalImageBytes = bytesXFile;
+            finalFace = faces.first;
+            fallbackUsed = 'DIRECT';
+            if (kDebugMode)
+              print('💾 [$tid] (${t2}ms) PHASE 1A OK: takePicture() مباشر');
+          } else {
+            failReason = 'NO_FACE_IN_CAPTURED';
+            throw Exception('لا يوجد وجه → Fallback JPG.');
           }
-          finalImageBytes = bytesXFile;
-          finalFace = faces.first;
-          fallbackUsed = 'DIRECT';
-          if (kDebugMode) print('💾 [$tid] (${t2}ms) PHASE 1A OK: takePicture() مباشر');
-        } else {
-          failReason = 'NO_FACE_IN_CAPTURED';
-          throw Exception('لا يوجد وجه → Fallback JPG.');
-        }
         }
       } catch (capErr) {
         if (kDebugMode) print('💾 [$tid] ⚠️ المرحلة 1A فشلت: $capErr');
-        if (_lastProactiveCapturedJpg != null && _lastProactiveCapturedFace != null) {
+        if (_lastProactiveCapturedJpg != null &&
+            _lastProactiveCapturedFace != null) {
           finalImageBytes = _lastProactiveCapturedJpg!;
           finalFace = _lastProactiveCapturedFace!;
           fallbackUsed = 'PROACTIVE_JPG';
-          if (kDebugMode) print('💾 [$tid] PHASE 1B OK: Fallback → JPG استباقي (${finalImageBytes!.length ~/ 1024}KB)');
+          if (kDebugMode)
+            print(
+                '💾 [$tid] PHASE 1B OK: Fallback → JPG استباقي (${finalImageBytes!.length ~/ 1024}KB)');
         } else {
           throw StateError(_lang() == 'ar'
               ? 'تعذر الحصول على صورة وجه صالحة من الكاميرا. أعد المحاولة مع إبقاء الوجه ثابتاً داخل الإطار.'
@@ -670,7 +963,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       }
       final t2 = DateTime.now().difference(perfTrace).inMilliseconds;
       if (kDebugMode) {
-        print('💾 [$tid] (${t2}ms) PHASE 2 OK: زاوية صالحة Y=${headY.toStringAsFixed(1)}° X=${headX.toStringAsFixed(1)}°');
+        print(
+            '💾 [$tid] (${t2}ms) PHASE 2 OK: زاوية صالحة Y=${headY.toStringAsFixed(1)}° X=${headX.toStringAsFixed(1)}°');
       }
 
       // ----------------------------------------------------
@@ -691,7 +985,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       };
       final t3 = DateTime.now().difference(perfTrace).inMilliseconds;
       if (kDebugMode) {
-        print('💾 [$tid] (${t3}ms) PHASE 3 OK: Base64 (${base64Image.length ~/ 1024}KB) + Metadata');
+        print(
+            '💾 [$tid] (${t3}ms) PHASE 3 OK: Base64 (${base64Image.length ~/ 1024}KB) + Metadata');
       }
 
       // ----------------------------------------------------
@@ -704,7 +999,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
 
       for (saveAttempt = 1; saveAttempt <= maxAttempts; saveAttempt++) {
         try {
-          if (kDebugMode) print('💾 [$tid] 🔄 محاولة $saveAttempt/$maxAttempts...');
+          if (kDebugMode)
+            print('💾 [$tid] 🔄 محاولة $saveAttempt/$maxAttempts...');
           final sw = Stopwatch()..start();
           // 🆕 استخدام الدالة الجديدة: saveEmployeeFaceImage → Users_Employees (NO LIVENESS)
           final r = await FaceApiService.saveEmployeeFaceImage(
@@ -716,7 +1012,9 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
           final t4 = sw.elapsedMilliseconds;
           finalResult = r;
           if (_isSuccessResult(r)) {
-            if (kDebugMode) print('💾 [$tid] (${t4}ms) PHASE 4 OK: تم الحفظ بنجاح (محاولة $saveAttempt)');
+            if (kDebugMode)
+              print(
+                  '💾 [$tid] (${t4}ms) PHASE 4 OK: تم الحفظ بنجاح (محاولة $saveAttempt)');
             lastApiErr = null;
             break;
           } else {
@@ -725,17 +1023,32 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
             // إيقاف Retry عند الأخطاء المنطقية (الشبكية فقط نعيدها):
             final errLower = lastApiErr!.toLowerCase();
             final stopKeywords = [
-              'غير موجود', 'غير مفعل', 'الموظف', 'not found',
-              'مسجلة مسبقاً', 'already saved', 'duplicate',
-              'غير مصرح', 'unauthorized', 'permission',
-              'القاعدة', 'database', 'invalid', 'constraint',
-              'جودة منخفضة', 'quality', 'no face', 'no face detected',
-              'غير واضح', 'blurry',
+              'غير موجود',
+              'غير مفعل',
+              'الموظف',
+              'not found',
+              'مسجلة مسبقاً',
+              'already saved',
+              'duplicate',
+              'غير مصرح',
+              'unauthorized',
+              'permission',
+              'القاعدة',
+              'database',
+              'invalid',
+              'constraint',
+              'جودة منخفضة',
+              'quality',
+              'no face',
+              'no face detected',
+              'غير واضح',
+              'blurry',
             ];
             final shouldStop = stopKeywords.any((k) =>
                 lastApiErr!.contains(k) || errLower.contains(k.toLowerCase()));
             if (shouldStop) {
-              if (kDebugMode) print('💾 [$tid] 🛑 توقف Retry (خطأ منطقي): $lastApiErr');
+              if (kDebugMode)
+                print('💾 [$tid] 🛑 توقف Retry (خطأ منطقي): $lastApiErr');
               break;
             }
           }
@@ -761,8 +1074,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
         );
         _completedSuccessfully = true;
         final totalMs = DateTime.now().difference(perfTrace).inMilliseconds;
-        final bool updatedExisting =
-            finalResult!['UpdatedExisting'] == true || finalResult!['Updated'] == true;
+        final bool updatedExisting = finalResult!['UpdatedExisting'] == true ||
+            finalResult!['Updated'] == true;
         if (kDebugMode) {
           print('✅ [ENROLL-SAVE-SUCCESS-$tid] ═══════════════');
           print('✅  الإجمالي: ${totalMs}ms | المحاولات: $saveAttempt');
@@ -805,13 +1118,23 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
           shouldAutoReset = false;
         }
         if (msg.contains('404') || msgLower.contains('not found')) {
-          msg = 'تعذر الوصول إلى خدمة الحفظ مؤقتاً. يتم الآن استخدام خدمة بديلة... يرجى المحاولة مرة أخرى إذا استمرت المشكلة.';
-        } else if (msg.contains('500') || msgLower.contains('server error') || msgLower.contains('internal server')) {
-          msg = 'يوجد خطأ في سيرفر قاعدة البيانات حالياً. يرجى المحاولة بعد بضع دقائق أو التواصل مع الدعم الفني.';
-        } else if (msgLower.contains('timeout') || msg.contains('مهلة') || msgLower.contains('timed out')) {
-          msg = 'الاستجابة بطيئة جداً من السيرفر. تأكد من قوة الإنترنت ثم أعد المحاولة.';
-        } else if (msgLower.contains('connection') || msgLower.contains('socket') || msgLower.contains('network')) {
-          msg = 'تعذر الاتصال بالسيرفر. تأكد من اتصالك بالإنترنت ثم أعد المحاولة.';
+          msg =
+              'تعذر الوصول إلى خدمة الحفظ مؤقتاً. يتم الآن استخدام خدمة بديلة... يرجى المحاولة مرة أخرى إذا استمرت المشكلة.';
+        } else if (msg.contains('500') ||
+            msgLower.contains('server error') ||
+            msgLower.contains('internal server')) {
+          msg =
+              'يوجد خطأ في سيرفر قاعدة البيانات حالياً. يرجى المحاولة بعد بضع دقائق أو التواصل مع الدعم الفني.';
+        } else if (msgLower.contains('timeout') ||
+            msg.contains('مهلة') ||
+            msgLower.contains('timed out')) {
+          msg =
+              'الاستجابة بطيئة جداً من السيرفر. تأكد من قوة الإنترنت ثم أعد المحاولة.';
+        } else if (msgLower.contains('connection') ||
+            msgLower.contains('socket') ||
+            msgLower.contains('network')) {
+          msg =
+              'تعذر الاتصال بالسيرفر. تأكد من اتصالك بالإنترنت ثم أعد المحاولة.';
         }
         if (kDebugMode) print('❌❌❌ [ENROLL-SAVE-$tid] فشل نهائي. السبب: $msg');
         if (mounted) {
@@ -834,7 +1157,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
     } catch (e, stack) {
       if (kDebugMode) {
         final ms = DateTime.now().difference(perfTrace).inMilliseconds;
-        print('❌❌❌ [ENROLL-SAVE-$tid] استثناء فادح (${ms}ms) | المرحلة: $phase');
+        print(
+            '❌❌❌ [ENROLL-SAVE-$tid] استثناء فادح (${ms}ms) | المرحلة: $phase');
         print('❌❌❌ الخطأ: $e');
         print('❌❌❌ Stack: $stack');
       }
@@ -844,14 +1168,21 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
         String friendlyMsg;
         var shouldAutoReset = true;
         if (rawErr.contains('404') || errLower.contains('not found')) {
-          friendlyMsg = 'خدمة الحفظ غير متاحة حالياً، تم التبديل إلى الخدمة البديلة. يرجى المحاولة مرة أخرى.';
-        } else if (rawErr.contains('500') || errLower.contains('server error')) {
+          friendlyMsg =
+              'خدمة الحفظ غير متاحة حالياً، تم التبديل إلى الخدمة البديلة. يرجى المحاولة مرة أخرى.';
+        } else if (rawErr.contains('500') ||
+            errLower.contains('server error')) {
           friendlyMsg = 'خطأ في سيرفر قاعدة البيانات. يرجى المحاولة لاحقاً.';
-        } else if (errLower.contains('timeout') || errLower.contains('timed out')) {
-          friendlyMsg = 'الاستجابة بطيئة جداً. تأكد من الإنترنت ثم أعد المحاولة.';
-        } else if (errLower.contains('connection') || errLower.contains('socket') || errLower.contains('network')) {
+        } else if (errLower.contains('timeout') ||
+            errLower.contains('timed out')) {
+          friendlyMsg =
+              'الاستجابة بطيئة جداً. تأكد من الإنترنت ثم أعد المحاولة.';
+        } else if (errLower.contains('connection') ||
+            errLower.contains('socket') ||
+            errLower.contains('network')) {
           friendlyMsg = 'تعذر الاتصال بالسيرفر. تحقق من اتصال الإنترنت.';
-        } else if (errLower.contains('string or binary data would be truncated') ||
+        } else if (errLower
+                .contains('string or binary data would be truncated') ||
             errLower.contains('binary or string data would be truncated') ||
             errLower.contains('truncated')) {
           friendlyMsg =
@@ -865,9 +1196,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
           _statusMessage = friendlyMsg;
           _isProcessing = false;
           _isSavingToServer = false;
-          _poseHintMessage = shouldAutoReset
-              ? ''
-              : 'بعد قراءة الرسالة اضغط "إعادة المحاولة".';
+          _poseHintMessage =
+              shouldAutoReset ? '' : 'بعد قراءة الرسالة اضغط "إعادة المحاولة".';
           _borderColor = Colors.red;
         });
         if (shouldAutoReset) {
@@ -962,10 +1292,12 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
                   // ✅ البطاقة العلوية (العنوان المبسط):
                   Positioned(
                     top: 16,
-                    left: 0, right: 0,
+                    left: 0,
+                    right: 0,
                     child: Center(
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 8),
                         decoration: BoxDecoration(
                           color: Colors.black54,
                           borderRadius: BorderRadius.circular(16),
@@ -985,7 +1317,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
                   if (_poseHintMessage.isNotEmpty)
                     Positioned(
                       top: 64,
-                      left: 12, right: 12,
+                      left: 12,
+                      right: 12,
                       child: Center(
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 300),
@@ -1002,7 +1335,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
                             boxShadow: [
                               BoxShadow(
                                 color: _borderColor.withOpacity(0.35),
-                                blurRadius: 16, spreadRadius: 2,
+                                blurRadius: 16,
+                                spreadRadius: 2,
                               ),
                             ],
                           ),
@@ -1011,9 +1345,11 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
                             children: [
                               AnimatedContainer(
                                 duration: const Duration(milliseconds: 500),
-                                width: 10, height: 10,
+                                width: 10,
+                                height: 10,
                                 decoration: const BoxDecoration(
-                                  color: Colors.white, shape: BoxShape.circle,
+                                  color: Colors.white,
+                                  shape: BoxShape.circle,
                                 ),
                               ),
                               const SizedBox(width: 10),
@@ -1048,7 +1384,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
                             boxShadow: [
                               BoxShadow(
                                 color: _borderColor.withOpacity(0.25),
-                                blurRadius: 20, spreadRadius: 3,
+                                blurRadius: 20,
+                                spreadRadius: 3,
                               ),
                             ],
                           ),
@@ -1095,7 +1432,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const CircularProgressIndicator(color: Colors.white),
+                            const CircularProgressIndicator(
+                                color: Colors.white),
                             const SizedBox(height: 16),
                             Text(
                               _statusMessage,
@@ -1121,7 +1459,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black12,
-                    blurRadius: 20, spreadRadius: 2,
+                    blurRadius: 20,
+                    spreadRadius: 2,
                     offset: Offset(0, -5),
                   ),
                 ],
@@ -1160,14 +1499,16 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
                     width: double.infinity,
                     height: 60,
                     child: ElevatedButton.icon(
-                      onPressed:
-                          (!_isProcessing && !_isSavingToServer && _isFaceCurrentlyDetected)
-                              ? _manualOrAutoCapture
-                              : null,
+                      onPressed: (!_isProcessing &&
+                              !_isSavingToServer &&
+                              _isFaceCurrentlyDetected)
+                          ? _manualOrAutoCapture
+                          : null,
                       icon: const Icon(Icons.photo_camera, size: 26),
                       label: const Text(
                         'التقاط الصورة الآن',
-                        style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                            fontSize: 17, fontWeight: FontWeight.bold),
                       ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.blue.shade600,
@@ -1184,10 +1525,9 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
                     width: double.infinity,
                     height: 50,
                     child: OutlinedButton.icon(
-                      onPressed:
-                          (!_isProcessing && !_isSavingToServer)
-                              ? _resetAndStartOver
-                              : null,
+                      onPressed: (!_isProcessing && !_isSavingToServer)
+                          ? _resetAndStartOver
+                          : null,
                       icon: const Icon(Icons.refresh),
                       label: Text(
                         _t('retry'),
@@ -1195,8 +1535,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
                       ),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.blue,
-                        side: BorderSide(
-                            color: Colors.blue.shade200, width: 1.5),
+                        side:
+                            BorderSide(color: Colors.blue.shade200, width: 1.5),
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14)),
                       ),

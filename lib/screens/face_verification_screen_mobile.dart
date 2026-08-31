@@ -33,8 +33,7 @@ class FaceVerificationScreen extends StatefulWidget {
 class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     with WidgetsBindingObserver {
   static const bool _enableRemoteDebugTelemetry = true;
-  static const String _debugEnvPath =
-      'd:\\new\\.dbg\\ios-face-verify.env';
+  static const String _debugEnvPath = 'd:\\new\\.dbg\\face-detection-fail.env';
   String? _debugServerUrl;
   String? _debugSessionId;
   // #region debug-point A:reporting-helper
@@ -61,7 +60,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         } catch (_) {}
       }
       final url = _debugServerUrl ?? 'http://192.168.1.163:7777/event';
-      final session = _debugSessionId ?? 'ios-face-verify';
+      final session = _debugSessionId ?? 'face-detection-fail';
       final client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 2);
       final req = await client.postUrl(
@@ -131,6 +130,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   int _frameCounter = 0;
   static const int _processEveryNthFrame =
       3; // ⚡ من 2 إلى 3 → تقليل استهلاك المعالج 33%
+  int _lastTelemetryFaceCount = -999;
   bool _isStartingImageStream = false;
 
   // ⚡ نفس حماية Race Condition للتسجيل (تطبيقها على التحقق للاتساق):
@@ -140,6 +140,14 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   InputImageRotation? _lastValidFrameRotation;
   Face? _lastValidFace;
   bool _verificationCaptureCompleted = false;
+  int _noFaceGraceStreak = 0;
+
+  static const Map<DeviceOrientation, int> _cameraOrientationMap = {
+    DeviceOrientation.portraitUp: 0,
+    DeviceOrientation.landscapeLeft: 90,
+    DeviceOrientation.portraitDown: 180,
+    DeviceOrientation.landscapeRight: 270,
+  };
 
   @override
   void initState() {
@@ -314,10 +322,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   // ⚡ إصلاح 2: نظام التقاط الاستباقي (نفس منطق التسجيل)
   void _startProactiveCaptureLoop() {
-    _proactiveCaptureTimer =
-        Timer.periodic(
-            Duration(milliseconds: Platform.isIOS ? 1800 : 3000),
-            (timer) async {
+    _proactiveCaptureTimer = Timer.periodic(
+        Duration(milliseconds: Platform.isIOS ? 1800 : 3000), (timer) async {
       if (!mounted ||
           _isInitializing ||
           _isProcessing ||
@@ -363,6 +369,73 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       _lastProactiveCapturedJpg = null;
       _lastProactiveCapturedFace = null;
     }
+  }
+
+  Future<bool> _ensureFreshIosProactiveCapture({int attempts = 2}) async {
+    if (!Platform.isIOS) {
+      return _lastProactiveCapturedJpg != null &&
+          _lastProactiveCapturedFace != null;
+    }
+
+    for (int attempt = 1; attempt <= attempts; attempt++) {
+      // #region debug-point A:ios-proactive-capture-attempt
+      unawaited(_reportDebugEvent(
+        'A',
+        'face_verification_screen_mobile.dart:_ensureFreshIosProactiveCapture',
+        'Starting iPhone proactive JPG attempt',
+        data: {
+          'attempt': attempt,
+          'attempts': attempts,
+          'existingJpg': _lastProactiveCapturedJpg != null,
+          'existingFace': _lastProactiveCapturedFace != null,
+        },
+      ));
+      // #endregion
+      try {
+        await _runProactiveCaptureOnce();
+      } catch (_) {}
+
+      if (_lastProactiveCapturedJpg != null &&
+          _lastProactiveCapturedFace != null) {
+        // #region debug-point A:ios-proactive-capture-success
+        unawaited(_reportDebugEvent(
+          'A',
+          'face_verification_screen_mobile.dart:_ensureFreshIosProactiveCapture',
+          'iPhone proactive JPG ready before verification',
+          data: {
+            'attempt': attempt,
+            'attempts': attempts,
+            'imageKb': _lastProactiveCapturedJpg!.length ~/ 1024,
+            'boundingBoxWidth': _lastProactiveCapturedFace!.boundingBox.width,
+            'boundingBoxHeight': _lastProactiveCapturedFace!.boundingBox.height,
+          },
+        ));
+        // #endregion
+        if (kDebugMode) {
+          print(
+              '📸 [Verify-iPhone] تم تجهيز JPG نهائية صالحة قبل الإرسال (attempt=$attempt/$attempts)');
+        }
+        return true;
+      }
+
+      if (attempt < attempts) {
+        await Future.delayed(const Duration(milliseconds: 180));
+      }
+    }
+
+    // #region debug-point A:ios-proactive-capture-failed
+    unawaited(_reportDebugEvent(
+      'A',
+      'face_verification_screen_mobile.dart:_ensureFreshIosProactiveCapture',
+      'iPhone proactive JPG unavailable before verification',
+      data: {
+        'attempts': attempts,
+        'existingJpg': _lastProactiveCapturedJpg != null,
+        'existingFace': _lastProactiveCapturedFace != null,
+      },
+    ));
+    // #endregion
+    return false;
   }
 
   Future<XFile?> _tryTakePictureOrNull({required int timeoutMs}) async {
@@ -789,6 +862,120 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     }
   }
 
+  Future<
+          ({
+            InputImage inputImage,
+            InputImageRotation rotation,
+            InputImageFormat format,
+            int bytesPerRow,
+            int planesLength,
+          })?>
+      _buildMlKitInput(CameraImage image, CameraController controller) async {
+    final camera = controller.description;
+    final imageSize = Size(image.width.toDouble(), image.height.toDouble());
+
+    InputImageRotation? rotation;
+    if (Platform.isIOS) {
+      rotation =
+          InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
+              InputImageRotation.rotation0deg;
+    } else {
+      final deviceRotation =
+          _cameraOrientationMap[controller.value.deviceOrientation];
+      if (deviceRotation == null) {
+        return null;
+      }
+      final adjustedRotation = camera.lensDirection == CameraLensDirection.front
+          ? (camera.sensorOrientation + deviceRotation) % 360
+          : (camera.sensorOrientation - deviceRotation + 360) % 360;
+      rotation = InputImageRotationValue.fromRawValue(adjustedRotation);
+      if (rotation == null) {
+        return null;
+      }
+    }
+
+    final inputImageFormat =
+        InputImageFormatValue.fromRawValue(image.format.raw);
+    if (inputImageFormat == null) {
+      return null;
+    }
+
+    if (Platform.isIOS && inputImageFormat != InputImageFormat.bgra8888) {
+      return null;
+    }
+
+    late final Uint8List imageBytes;
+    late final InputImageFormat effectiveFormat;
+    late final int bytesPerRow;
+
+    if (Platform.isAndroid) {
+      if (image.planes.length == 1 &&
+          inputImageFormat == InputImageFormat.nv21) {
+        imageBytes = image.planes.first.bytes;
+        effectiveFormat = InputImageFormat.nv21;
+        bytesPerRow = image.width;
+      } else if (image.planes.length == 3) {
+        imageBytes = _convertYuv420ToNv21(image);
+        effectiveFormat = InputImageFormat.nv21;
+        bytesPerRow = image.width;
+      } else {
+        return null;
+      }
+    } else {
+      if (image.planes.length != 1) {
+        return null;
+      }
+      imageBytes = image.planes.first.bytes;
+      effectiveFormat = inputImageFormat;
+      bytesPerRow = image.planes.first.bytesPerRow;
+    }
+
+    final metadata = InputImageMetadata(
+      size: imageSize,
+      rotation: rotation,
+      format: effectiveFormat,
+      bytesPerRow: bytesPerRow,
+    );
+
+    return (
+      inputImage: InputImage.fromBytes(bytes: imageBytes, metadata: metadata),
+      rotation: rotation,
+      format: effectiveFormat,
+      bytesPerRow: bytesPerRow,
+      planesLength: image.planes.length,
+    );
+  }
+
+  Uint8List _convertYuv420ToNv21(CameraImage image) {
+    final width = image.width;
+    final height = image.height;
+    final yPlane = image.planes[0];
+    final uPlane = image.planes[1];
+    final vPlane = image.planes[2];
+    final nv21 = Uint8List(width * height + (width * height ~/ 2));
+    var index = 0;
+
+    for (var row = 0; row < height; row++) {
+      final rowStart = row * yPlane.bytesPerRow;
+      nv21.setRange(index, index + width, yPlane.bytes, rowStart);
+      index += width;
+    }
+
+    final uPixelStride = uPlane.bytesPerPixel ?? 1;
+    final vPixelStride = vPlane.bytesPerPixel ?? 1;
+
+    for (var row = 0; row < height ~/ 2; row++) {
+      final uRowStart = row * uPlane.bytesPerRow;
+      final vRowStart = row * vPlane.bytesPerRow;
+      for (var col = 0; col < width ~/ 2; col++) {
+        nv21[index++] = vPlane.bytes[vRowStart + col * vPixelStride];
+        nv21[index++] = uPlane.bytes[uRowStart + col * uPixelStride];
+      }
+    }
+
+    return nv21;
+  }
+
   Future<void> _processCameraImage(CameraImage image) async {
     // ⚡ نفس الحماية Race Condition للتسجيل (تجنب تعليق الكاميرا):
     // لا نوقف المعالجة عند Status.passed، بل عند اكتمال التقاط الصورة فور نجاح الـ API.
@@ -807,50 +994,58 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         return;
       }
 
-      final BytesBuilder bytesBuilder = BytesBuilder(copy: false);
-      for (final Plane plane in image.planes) {
-        bytesBuilder.add(plane.bytes);
+      final built = await _buildMlKitInput(image, controller);
+      if (built == null) {
+        if (_frameCounter % 45 == 0) {
+          // #region debug-point B:stream-input-unsupported
+          unawaited(_reportDebugEvent(
+            'B',
+            'face_verification_screen_mobile.dart:_processCameraImage',
+            'Skipped live frame because ML Kit input was unsupported',
+            data: {
+              'platform': Platform.operatingSystem,
+              'cameraName': controller.description.name,
+              'lensDirection': controller.description.lensDirection.name,
+              'sensorOrientation': controller.description.sensorOrientation,
+              'deviceOrientation': controller.value.deviceOrientation.name,
+              'imageWidth': image.width,
+              'imageHeight': image.height,
+              'planesLength': image.planes.length,
+              'formatRaw': image.format.raw,
+            },
+          ));
+          // #endregion
+        }
+        return;
       }
-      final Uint8List bytes = bytesBuilder.takeBytes();
-
-      final Size imageSize =
-          Size(image.width.toDouble(), image.height.toDouble());
 
       final camera = controller.description;
-      final imageRotation =
-          InputImageRotationValue.fromRawValue(camera.sensorOrientation) ??
-              InputImageRotation.rotation0deg;
-
-      final inputImageFormat =
-          InputImageFormatValue.fromRawValue(image.format.raw) ??
-              (Platform.isAndroid
-                  ? InputImageFormat.nv21
-                  : InputImageFormat.bgra8888);
-
-      final int bytesPerRow =
-          image.planes.isNotEmpty ? image.planes.first.bytesPerRow : 0;
-
-      final inputImageMetadata = InputImageMetadata(
-        size: imageSize,
-        rotation: imageRotation,
-        format: inputImageFormat,
-        bytesPerRow: bytesPerRow,
-      );
-
-      final inputImage =
-          InputImage.fromBytes(bytes: bytes, metadata: inputImageMetadata);
-      final faces = await _faceDetector.processImage(inputImage);
+      final imageRotation = built.rotation;
+      final inputImageFormat = built.format;
+      final bytesPerRow = built.bytesPerRow;
+      final Size imageSize =
+          Size(image.width.toDouble(), image.height.toDouble());
+      final Uint8List singlePlaneBytes = image.planes.first.bytes;
+      final faces = await _faceDetector.processImage(built.inputImage);
 
       Face? currentFace;
-      final faceCount = faces.length;
+      var faceCount = faces.length;
       if (faceCount == 1) {
         currentFace = faces.first;
+        _noFaceGraceStreak = 0;
         // ⚡ تخزين آخر إطار صالح كـ Fallback (مثل التسجيل)
-        _lastValidFrameBytes = bytes;
+        _lastValidFrameBytes = singlePlaneBytes;
         _lastValidFrameSize = imageSize;
         _lastValidFrameRotation = imageRotation;
         _lastValidFace = currentFace;
+      } else if (faceCount == 0 &&
+          _lastValidFace != null &&
+          _noFaceGraceStreak < 2) {
+        _noFaceGraceStreak++;
+        currentFace = _lastValidFace;
+        faceCount = 1;
       } else {
+        _noFaceGraceStreak = 0;
         _lastValidFrameBytes = null;
         _lastValidFrameSize = null;
         _lastValidFrameRotation = null;
@@ -861,6 +1056,34 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         currentFace: currentFace,
         previousFace: _previousTrackedFace,
       );
+
+      if (faceCount != _lastTelemetryFaceCount || _frameCounter % 45 == 0) {
+        _lastTelemetryFaceCount = faceCount;
+        // #region debug-point A:stream-face-detection
+        unawaited(_reportDebugEvent(
+          'A',
+          'face_verification_screen_mobile.dart:_processCameraImage',
+          'Processed live camera frame for face detection',
+          data: {
+            'platform': Platform.operatingSystem,
+            'cameraName': camera.name,
+            'lensDirection': camera.lensDirection.name,
+            'sensorOrientation': camera.sensorOrientation,
+            'deviceOrientation': controller.value.deviceOrientation.name,
+            'imageWidth': image.width,
+            'imageHeight': image.height,
+            'planesLength': image.planes.length,
+            'formatRaw': image.format.raw,
+            'inputImageFormat': inputImageFormat.name,
+            'bytesPerRow': bytesPerRow,
+            'faceCount': faceCount,
+            'hasCurrentFace': currentFace != null,
+            'boundingBoxWidth': currentFace?.boundingBox.width,
+            'boundingBoxHeight': currentFace?.boundingBox.height,
+          },
+        ));
+        // #endregion
+      }
 
       final samplePixels = _extractFaceTextureSamples(image, currentFace);
       final noiseVar =
@@ -974,6 +1197,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       phase = 'CAPTURE_IMAGE';
       String fallbackUsed = 'NONE';
       try {
+        if (Platform.isIOS) {
+          await _ensureFreshIosProactiveCapture();
+        }
         if (Platform.isIOS &&
             _lastProactiveCapturedJpg != null &&
             _lastProactiveCapturedFace != null) {
@@ -985,78 +1211,80 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                 '⚡ [VERIFY-PERF] استخدام JPEG استباقية كأساس على iPhone (${finalImageBytes!.length ~/ 1024}KB)');
           }
         } else {
-        final swCap = Stopwatch()..start();
-        final activeController = _controller;
-        if (activeController == null || !activeController.value.isInitialized) {
-          throw StateError(_lang() == 'ar'
-              ? 'تم فقدان اتصال الكاميرا أثناء التحقق. أعد فتح شاشة التحقق.'
-              : 'Camera connection was lost during verification. Reopen the verification screen.');
-        }
-        if (activeController.value.isStreamingImages) {
-          await activeController.stopImageStream();
-          _streamPausedForStillCapture = true;
-        }
-        // #region debug-point B:take-picture-before
-        unawaited(_reportDebugEvent(
-          'B',
-          'face_verification_screen_mobile.dart:takePicture-before',
-          'Calling takePicture',
-          data: {
-            'isStreamingImages': _controller?.value.isStreamingImages ?? false,
-            'fallbackJpgExists': _lastProactiveCapturedJpg != null,
-            'fallbackRawExists': _lastValidFrameBytes != null,
-          },
-        ));
-        // #endregion
-        final XFile rawImage = await activeController.takePicture().timeout(
-          const Duration(seconds: 8),
-          onTimeout: () {
-            failReason = 'TIMEOUT_TAKEPICTURE_8S';
-            throw TimeoutException(
-                'مهلة التقاط الصورة انتهت (8 ثوانٍ) — سنستخدم آخر صورة JPG محفوظة.');
-          },
-        );
-        final t2a = swCap.elapsedMilliseconds;
-        final bytesXFile = await File(rawImage.path)
-            .readAsBytes()
-            .timeout(const Duration(seconds: 4));
-        final t2b = swCap.elapsedMilliseconds;
-        final inputImage = InputImage.fromFilePath(rawImage.path);
-        final faces = await _faceDetector
-            .processImage(inputImage)
-            .timeout(const Duration(seconds: 6));
-        final t2c = swCap.elapsedMilliseconds;
-
-        if (faces.length == 1) {
-          finalImageBytes = bytesXFile;
-          finalFace = faces.first;
-          fallbackUsed = 'DIRECT';
-          if (kDebugMode)
-            print(
-                '⚡ [VERIFY-PERF] (${t2c}ms) PHASE 2A OK: takePicture() مباشر + وجه موجود ✅');
-          // #region debug-point B:take-picture-success
+          final swCap = Stopwatch()..start();
+          final activeController = _controller;
+          if (activeController == null ||
+              !activeController.value.isInitialized) {
+            throw StateError(_lang() == 'ar'
+                ? 'تم فقدان اتصال الكاميرا أثناء التحقق. أعد فتح شاشة التحقق.'
+                : 'Camera connection was lost during verification. Reopen the verification screen.');
+          }
+          if (activeController.value.isStreamingImages) {
+            await activeController.stopImageStream();
+            _streamPausedForStillCapture = true;
+          }
+          // #region debug-point B:take-picture-before
           unawaited(_reportDebugEvent(
             'B',
-            'face_verification_screen_mobile.dart:takePicture-success',
-            'Direct takePicture succeeded',
+            'face_verification_screen_mobile.dart:takePicture-before',
+            'Calling takePicture',
             data: {
-              'elapsedMs': t2c,
-              'imageKb': finalImageBytes!.length ~/ 1024,
-              'faceCount': faces.length,
+              'isStreamingImages':
+                  _controller?.value.isStreamingImages ?? false,
+              'fallbackJpgExists': _lastProactiveCapturedJpg != null,
+              'fallbackRawExists': _lastValidFrameBytes != null,
             },
           ));
           // #endregion
-        } else if (faces.length > 1) {
-          failReason = 'MULTI_FACE_IN_CAPTURED';
-          throw StateError(_lang() == 'ar'
-              ? 'تم اكتشاف أكثر من وجه في الصورة. يرجى أن يظهر وجه موظف واحد فقط.'
-              : 'More than one face detected in the captured image.');
-        } else {
-          failReason = 'NO_FACE_IN_CAPTURED';
-          throw StateError(_lang() == 'ar'
-              ? 'لم يتم اكتشاف وجه في الصورة الملتقطة. يرجى الوقوف أمام الكاميرا بشكل صحيح.'
-              : 'No face detected in the captured image.');
-        }
+          final XFile rawImage = await activeController.takePicture().timeout(
+            const Duration(seconds: 8),
+            onTimeout: () {
+              failReason = 'TIMEOUT_TAKEPICTURE_8S';
+              throw TimeoutException(
+                  'مهلة التقاط الصورة انتهت (8 ثوانٍ) — سنستخدم آخر صورة JPG محفوظة.');
+            },
+          );
+          final t2a = swCap.elapsedMilliseconds;
+          final bytesXFile = await File(rawImage.path)
+              .readAsBytes()
+              .timeout(const Duration(seconds: 4));
+          final t2b = swCap.elapsedMilliseconds;
+          final inputImage = InputImage.fromFilePath(rawImage.path);
+          final faces = await _faceDetector
+              .processImage(inputImage)
+              .timeout(const Duration(seconds: 6));
+          final t2c = swCap.elapsedMilliseconds;
+
+          if (faces.length == 1) {
+            finalImageBytes = bytesXFile;
+            finalFace = faces.first;
+            fallbackUsed = 'DIRECT';
+            if (kDebugMode)
+              print(
+                  '⚡ [VERIFY-PERF] (${t2c}ms) PHASE 2A OK: takePicture() مباشر + وجه موجود ✅');
+            // #region debug-point B:take-picture-success
+            unawaited(_reportDebugEvent(
+              'B',
+              'face_verification_screen_mobile.dart:takePicture-success',
+              'Direct takePicture succeeded',
+              data: {
+                'elapsedMs': t2c,
+                'imageKb': finalImageBytes!.length ~/ 1024,
+                'faceCount': faces.length,
+              },
+            ));
+            // #endregion
+          } else if (faces.length > 1) {
+            failReason = 'MULTI_FACE_IN_CAPTURED';
+            throw StateError(_lang() == 'ar'
+                ? 'تم اكتشاف أكثر من وجه في الصورة. يرجى أن يظهر وجه موظف واحد فقط.'
+                : 'More than one face detected in the captured image.');
+          } else {
+            failReason = 'NO_FACE_IN_CAPTURED';
+            throw StateError(_lang() == 'ar'
+                ? 'لم يتم اكتشاف وجه في الصورة الملتقطة. يرجى الوقوف أمام الكاميرا بشكل صحيح.'
+                : 'No face detected in the captured image.');
+          }
         }
       } on StateError {
         rethrow;
@@ -1087,8 +1315,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           if (kDebugMode)
             print(
                 '⚡ [VERIFY-PERF] (${t2fb1}ms) PHASE 2B OK: Fallback 1 → صورة JPG استباقية (حجم=${finalImageBytes!.length ~/ 1024}KB) ✅');
-        }
-        else {
+        } else {
           throw StateError(_lang() == 'ar'
               ? 'تعذر الحصول على صورة وجه صالحة من الكاميرا. أعد المحاولة مع إبقاء الوجه ثابتاً داخل الإطار.'
               : 'Unable to obtain a valid face image from the camera. Try again while keeping your face steady inside the frame.');

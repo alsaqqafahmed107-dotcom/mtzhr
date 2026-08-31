@@ -42,8 +42,7 @@ class AttendanceScreen extends StatefulWidget {
 class _AttendanceScreenState extends State<AttendanceScreen>
     with TickerProviderStateMixin {
   static const bool _enableRemoteDebugTelemetry = true;
-  static const String _debugEnvPath =
-      'd:\\new\\.dbg\\ios-face-verify.env';
+  static const String _debugEnvPath = 'd:\\new\\.dbg\\ios-face-verify.env';
   String? _debugServerUrl;
   String? _debugSessionId;
   // #region debug-point C:reporting-helper
@@ -798,7 +797,9 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               : '';
           final hint = navigationResult == null
               ? ' (ملاحظة: تم إغلاق شاشة التحقق يدوياً).'
-              : ' (تم استلام قيمة غير متوقعة: ${navigationResult.runtimeType}).';
+              : navigationResult is Map
+                  ? ' (تم استلام رد فشل من شاشة التحقق ولم يؤكد نجاح المطابقة).'
+                  : ' (تم استلام قيمة غير متوقعة: ${navigationResult.runtimeType}).';
           final verificationMessage = !hasStoredFace && !enrollmentCompleted
               ? 'لا توجد بصمة وجه محفوظة لهذا الموظف بعد، لذلك يجب إكمال تسجيل الوجه أولاً ثم تنفيذ التحقق قبل الحضور.$hint'
               : !hasStoredFace && enrollmentCompleted
