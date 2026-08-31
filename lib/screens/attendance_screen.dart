@@ -3,12 +3,10 @@ import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 import '../models/attendance.dart';
 import '../services/api_service.dart';
-import '../services/biometric_service.dart';
 import '../services/location_stability_service.dart';
 import '../services/face_api_service.dart';
 import 'face_enrollment_screen.dart';
 import 'face_verification_screen.dart';
-import 'dart:math' as math;
 import '../services/language_service.dart';
 import '../services/translations.dart';
 import 'package:geolocator/geolocator.dart';
@@ -693,10 +691,12 @@ class _AttendanceScreenState extends State<AttendanceScreen>
           faceStatus['HasFaceImage'] == true ||
           faceStatus['HasImage'] == true ||
           faceStatus['IsRegistered'] == true;
+      final selectedMethod = widget.authenticationMethod?.toUpperCase();
       final shouldRequireFace = faceStatus['IsFaceRequired'] == true ||
           attendanceMethod == 1 ||
           attendanceMethod == 2 ||
-          widget.authenticationMethod == 'FACE';
+          selectedMethod == 'FACE' ||
+          widget.authenticationMethod == 'الوجه';
 
       if (shouldRequireFace) {
         bool faceVerified = false;
@@ -1091,33 +1091,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       });
 
       setState(() {
-        _currentStep = Translations.getText('checking_biometric', lang);
-      });
-
-      // التحقق الحيوي المحلي يُستخدم فقط للبصمة المحلية أو كمسار احتياطي نادر.
-      // أما عندما يتم التحقق من الوجه عبر شاشة FaceVerificationScreen بنجاح،
-      // فلا نعيد طلب تحقق محلي ثانٍ لأن ذلك يُسقط العملية بعد نجاح الكاميرا.
-      if (widget.authenticationMethod == 'FINGERPRINT' ||
-          (widget.authenticationMethod == 'FACE' && !_usedFaceVerification)) {
-        final biometricResult =
-            await BiometricService.authenticateForAttendance(
-          isCheckIn: widget.isCheckIn,
-          employeeName: widget.employeeName,
-        );
-
-        if (!biometricResult) {
-          _showError(
-              Translations.getText('biometric_verification_failed', lang),
-              'يرجى المحاولة مرة أخرى');
-          return;
-        }
-      } else if (widget.authenticationMethod == 'FACE' &&
-          _usedFaceVerification) {
-        _log(
-            '✅ تم تجاوز التحقق الحيوي المحلي لأن التحقق من الوجه اكتمل بنجاح بالفعل.');
-      }
-
-      setState(() {
         _currentStep = Translations.getText('registering_data', lang);
       });
 
@@ -1144,9 +1117,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         notes: widget.isCheckIn ? 'Check In' : 'Check Out',
         deviceInfo: deviceInfo,
         temperature: null,
-        authenticationMethod: _usedFaceVerification
-            ? 'FACE'
-            : (widget.authenticationMethod ?? 'GPS'),
+        authenticationMethod:
+            _usedFaceVerification || shouldRequireFace ? 'FACE' : 'GPS',
         faceVerificationPassed: _usedFaceVerification,
         faceVerificationAtUtc:
             _faceVerificationProof?['verificationAtUtc']?.toString(),

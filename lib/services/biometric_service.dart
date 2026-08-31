@@ -5,6 +5,9 @@ import 'dart:convert';
 
 class BiometricService {
   static final LocalAuthentication _localAuth = LocalAuthentication();
+  static String? _lastBiometricError;
+
+  static String? get lastBiometricError => _lastBiometricError;
 
   // دالة تسجيل الأحداث للتطوير
   static void _log(String message) {
@@ -95,10 +98,13 @@ class BiometricService {
     String? employeeName,
   }) async {
     if (kIsWeb) return false;
+    _lastBiometricError = null;
     try {
       final deviceSupported = await _localAuth.isDeviceSupported();
       final availableBiometrics = await _localAuth.getAvailableBiometrics();
       if (!deviceSupported || availableBiometrics.isEmpty) {
+        _lastBiometricError =
+            'deviceSupported=$deviceSupported, availableBiometrics=${availableBiometrics.map((b) => b.name).join(',')}';
         _log(
             '❌ BiometricService: المصادقة البيومترية غير جاهزة لأول تسجيل دخول');
         return false;
@@ -108,18 +114,51 @@ class BiometricService {
           ? employeeName!.trim()
           : 'الموظف';
 
-      final result = await _localAuth.authenticate(
-        localizedReason:
-            'يرجى التحقق بالوجه أو البصمة لإكمال أول تسجيل دخول - $employee',
-        options: const AuthenticationOptions(
-          biometricOnly: true,
-          stickyAuth: true,
-        ),
-      );
+      Future<bool> runAttempt(int attempt) async {
+        try {
+          final result = await _localAuth
+              .authenticate(
+                localizedReason:
+                    'يرجى التحقق بالوجه أو البصمة لإكمال أول تسجيل دخول - $employee',
+                options: const AuthenticationOptions(
+                  biometricOnly: true,
+                  stickyAuth: true,
+                ),
+              )
+              .timeout(const Duration(seconds: 15));
+          if (!result) {
+            _lastBiometricError =
+                'authenticate_returned_false_attempt_$attempt';
+          }
+          return result;
+        } on PlatformException catch (e) {
+          _lastBiometricError = 'platform:${e.code}:${e.message ?? ''}';
+          _log('💥 BiometricService: PlatformException في أول تسجيل دخول: $e');
+          return false;
+        } catch (e) {
+          _lastBiometricError = 'generic:$e';
+          _log('💥 BiometricService: خطأ عام في أول تسجيل دخول: $e');
+          return false;
+        }
+      }
 
-      _log('🔐 BiometricService: نتيجة التحقق لأول تسجيل دخول: $result');
+      var result = await runAttempt(1);
+      if (result) {
+        _log('🔐 BiometricService: نتيجة التحقق لأول تسجيل دخول: true');
+        return true;
+      }
+
+      try {
+        await _localAuth.stopAuthentication();
+      } catch (_) {}
+      await Future.delayed(const Duration(milliseconds: 350));
+
+      result = await runAttempt(2);
+      _log(
+          '🔐 BiometricService: نتيجة التحقق لأول تسجيل دخول بعد إعادة المحاولة: $result');
       return result;
     } catch (e) {
+      _lastBiometricError = 'outer:$e';
       _log('💥 BiometricService: خطأ في التحقق البيومتري لأول دخول: $e');
       return false;
     }

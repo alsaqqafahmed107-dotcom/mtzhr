@@ -18,7 +18,6 @@ import '../widgets/responsive_center.dart';
 import '../utils/platform_helper.dart';
 
 import '../services/api_service.dart';
-import '../services/biometric_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -297,32 +296,6 @@ class _LoginScreenState extends State<LoginScreen>
         '${values[15].toRadixString(16).padLeft(2, '0')}';
   }
 
-  String _firstLoginBiometricKey(api_models.EmployeeData employee) {
-    return 'login_biometric_passed_${employee.clientID}_${employee.employeeNumber}';
-  }
-
-  String _buildBiometricUnavailableMessage(String lang) {
-    if (lang == 'ar') {
-      return 'لا يمكن تسجيل الدخول لأن هذا الجهاز لا يملك مصادقة بيومترية مفعّلة. فعّل Face ID أو Touch ID أو بصمة الإصبع أولاً.';
-    }
-    return 'Login is blocked because this device does not have an enrolled biometric. Enable Face ID, Touch ID, or fingerprint first.';
-  }
-
-  String _buildBiometricLoginFailedMessage(String lang) {
-    if (lang == 'ar') {
-      return 'فشل التحقق البيومتري لأول تسجيل دخول. لن يتم فتح الحساب حتى تنجح المصادقة المطلوبة.';
-    }
-    return 'First-login biometric verification failed. Account access is blocked until biometric authentication succeeds.';
-  }
-
-  Future<void> _clearSavedSessionOnly() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove('user_data');
-      await prefs.setBool('is_logged_in', false);
-    } catch (_) {}
-  }
-
   Future<void> _handleLogin() async {
     final languageService =
         Provider.of<LanguageService>(context, listen: false);
@@ -520,130 +493,19 @@ class _LoginScreenState extends State<LoginScreen>
       return true;
     }
 
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final gateKey = _firstLoginBiometricKey(employee);
-      final alreadyVerified = prefs.getBool(gateKey) ?? false;
-
-      if (alreadyVerified) {
-        // #region debug-point D:login-gate-already-passed
-        unawaited(_reportDebugEvent(
-          'D',
-          'login_screen.dart:_ensureFaceEnrollmentIfNeeded',
-          'First-login biometric gate already passed on this device',
-          data: {
-            'employeeNumber': employee.employeeNumber,
-            'clientId': employee.clientID,
-          },
-        ));
-        // #endregion
-        return true;
-      }
-
-      final localDeviceSupported = await BiometricService.isDeviceSupported();
-      final localCanCheck = await BiometricService.canCheckBiometrics();
-      final localHasEnrolled = await BiometricService.hasEnrolledBiometrics();
-      final availableBiometrics =
-          await BiometricService.getAvailableBiometrics();
-      // #region debug-point D:login-local-biometric-state
-      unawaited(_reportDebugEvent(
-        'D',
-        'login_screen.dart:_ensureFaceEnrollmentIfNeeded',
-        'Collected local biometric state before first-login gate',
-        data: {
-          'employeeNumber': employee.employeeNumber,
-          'clientId': employee.clientID,
-          'deviceSupported': localDeviceSupported,
-          'canCheckBiometrics': localCanCheck,
-          'hasEnrolledBiometrics': localHasEnrolled,
-          'availableBiometrics':
-              availableBiometrics.map((b) => b.name).toList(),
-          'alreadyVerified': alreadyVerified,
-        },
-      ));
-      // #endregion
-
-      final biometricReady = localDeviceSupported &&
-          localCanCheck &&
-          localHasEnrolled &&
-          availableBiometrics.isNotEmpty;
-
-      if (!biometricReady) {
-        await _clearSavedSessionOnly();
-        if (!mounted) return false;
-        setState(() {
-          _errorMessage = _buildBiometricUnavailableMessage(lang);
-        });
-        // #region debug-point C:login-blocked-no-biometric
-        unawaited(_reportDebugEvent(
-          'C',
-          'login_screen.dart:_ensureFaceEnrollmentIfNeeded',
-          'Blocked login because no enrolled local biometric exists',
-          data: {
-            'employeeNumber': employee.employeeNumber,
-            'deviceSupported': localDeviceSupported,
-            'canCheckBiometrics': localCanCheck,
-            'hasEnrolledBiometrics': localHasEnrolled,
-          },
-        ));
-        // #endregion
-        return false;
-      }
-
-      final authenticated = await BiometricService.authenticateForLogin(
-        employeeName: employee.name,
-      );
-      if (!authenticated) {
-        await _clearSavedSessionOnly();
-        if (!mounted) return false;
-        setState(() {
-          _errorMessage = _buildBiometricLoginFailedMessage(lang);
-        });
-        // #region debug-point C:login-blocked-auth-failed
-        unawaited(_reportDebugEvent(
-          'C',
-          'login_screen.dart:_ensureFaceEnrollmentIfNeeded',
-          'Blocked login because first-login biometric authentication failed',
-          data: {
-            'employeeNumber': employee.employeeNumber,
-          },
-        ));
-        // #endregion
-        return false;
-      }
-
-      await prefs.setBool(gateKey, true);
-      // #region debug-point D:login-gate-passed
-      unawaited(_reportDebugEvent(
-        'D',
-        'login_screen.dart:_ensureFaceEnrollmentIfNeeded',
-        'First-login biometric gate passed and was persisted',
-        data: {
-          'employeeNumber': employee.employeeNumber,
-          'clientId': employee.clientID,
-        },
-      ));
-      // #endregion
-      return true;
-    } catch (e) {
-      await _clearSavedSessionOnly();
-      if (!mounted) return false;
-      setState(() {
-        _errorMessage = _buildBiometricLoginFailedMessage(lang);
-      });
-      // #region debug-point E:login-exception-blocked
-      unawaited(_reportDebugEvent(
-        'E',
-        'login_screen.dart:_ensureFaceEnrollmentIfNeeded',
-        'Login biometric gate threw exception and blocked entry',
-        data: {
-          'employeeNumber': employee.employeeNumber,
-          'error': e.toString().split('\n').first,
-        },
-      ));
-      // #endregion
-      return false;
-    }
+    // تسجيل الدخول لا يستخدم البصمة المحلية. تسجيل الوجه والتحقق منه
+    // يتم فقط داخل مسار الحضور والانصراف عبر الكاميرا والخادم.
+    unawaited(_reportDebugEvent(
+      'D',
+      'login_screen.dart:_ensureFaceEnrollmentIfNeeded',
+      'Skipped local biometric gate because login now relies on password only',
+      data: {
+        'employeeNumber': employee.employeeNumber,
+        'clientId': employee.clientID,
+        'lang': lang,
+      },
+    ));
+    return true;
   }
 
   @override

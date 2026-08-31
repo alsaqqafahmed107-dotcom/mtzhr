@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
-import 'package:local_auth/local_auth.dart';
-import '../services/biometric_service.dart';
 import 'attendance_screen.dart';
 
 class AuthenticationMethodScreen extends StatefulWidget {
@@ -27,8 +25,7 @@ class _AuthenticationMethodScreenState
     extends State<AuthenticationMethodScreen> {
   bool _isLoading = false;
   final bool _gpsAvailable = true;
-  bool _fingerprintAvailable = false;
-  bool _faceAvailable = false;
+  final bool _faceAvailable = true;
 
   // دالة تسجيل الأحداث للتطوير
   void _log(String message) {
@@ -49,18 +46,6 @@ class _AuthenticationMethodScreenState
         _isLoading = true;
       });
 
-      // التحقق من توفر البصمة
-      final canCheckBiometrics = await BiometricService.canCheckBiometrics();
-      if (canCheckBiometrics) {
-        final availableBiometrics =
-            await BiometricService.getAvailableBiometrics();
-        setState(() {
-          _fingerprintAvailable =
-              availableBiometrics.contains(BiometricType.fingerprint);
-          _faceAvailable = availableBiometrics.contains(BiometricType.face);
-        });
-      }
-
       setState(() {
         _isLoading = false;
       });
@@ -76,9 +61,7 @@ class _AuthenticationMethodScreenState
     switch (method) {
       case 'GPS':
         return '📍';
-      case 'البصمة':
-        return '👆';
-      case 'الوجه':
+      case 'FACE':
         return '👤';
       default:
         return '❓';
@@ -88,11 +71,9 @@ class _AuthenticationMethodScreenState
   String _getMethodDescription(String method) {
     switch (method) {
       case 'GPS':
-        return 'تسجيل الحضور عبر تحديد الموقع الجغرافي';
-      case 'البصمة':
-        return 'تسجيل الحضور عبر بصمة الإصبع';
-      case 'الوجه':
-        return 'تسجيل الحضور عبر التعرف على الوجه';
+        return 'سيتم تحديد الموقع الجغرافي تلقائياً كجزء من عملية الحضور';
+      case 'FACE':
+        return 'سيتم فتح الكاميرا لتسجيل الوجه أو التحقق منه قبل الحضور والانصراف';
       default:
         return 'طريقة غير معروفة';
     }
@@ -172,23 +153,36 @@ class _AuthenticationMethodScreenState
                   ),
                   const SizedBox(height: 24),
                   const Text(
-                    'اختر طريقة المصادقة:',
+                    'طريقة التحقق المعتمدة:',
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                   const SizedBox(height: 16),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF16A34A).withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: const Color(0xFF16A34A).withOpacity(0.25),
+                      ),
+                    ),
+                    child: const Text(
+                      'سيتم استخدام بصمة الوجه فقط. إذا لم تكن صورة الوجه مسجلة لهذا الموظف فسيتم فتح شاشة تسجيل الوجه أولاً، ثم تنفيذ التحقق من الوجه قبل السماح بالحضور أو الانصراف.',
+                      style: TextStyle(fontSize: 14, height: 1.6),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
                   Expanded(
                     child: ListView.builder(
-                      itemCount: 3,
+                      itemCount: 2,
                       itemBuilder: (context, index) {
-                        final method = ['GPS', 'البصمة', 'الوجه'][index];
-                        final isSelected = [
-                          _gpsAvailable,
-                          _fingerprintAvailable,
-                          _faceAvailable
-                        ][index];
+                        final method = ['GPS', 'FACE'][index];
+                        final isSelected =
+                            [_gpsAvailable, _faceAvailable][index];
                         return Card(
                           margin: const EdgeInsets.only(bottom: 12),
                           elevation: isSelected ? 4 : 2,
@@ -266,10 +260,8 @@ class _AuthenticationMethodScreenState
                     width: double.infinity,
                     height: 56,
                     child: ElevatedButton(
-                      onPressed: _gpsAvailable ||
-                              _fingerprintAvailable ||
-                              _faceAvailable
-                          ? () => _selectMethod('GPS')
+                      onPressed: _gpsAvailable || _faceAvailable
+                          ? () => _selectMethod('FACE')
                           : null,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFF0EA5E9),
@@ -279,7 +271,7 @@ class _AuthenticationMethodScreenState
                         ),
                       ),
                       child: Text(
-                        'متابعة',
+                        'بدء التحقق بالوجه',
                         style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,

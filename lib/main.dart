@@ -105,28 +105,6 @@ void main() async {
     }
   }
 
-  if (!kIsWeb && savedUser != null) {
-    final gateKey =
-        'login_biometric_passed_${savedUser.clientID}_${savedUser.employeeNumber}';
-    final gatePassed = prefs.getBool(gateKey) ?? false;
-    if (!gatePassed) {
-      await prefs.remove('user_data');
-      await prefs.setBool('is_logged_in', false);
-      // #region debug-point C:auto-login-blocked
-      await _reportDebugEvent(
-        'C',
-        'main.dart:bootstrap',
-        'Blocked auto-login because first-login biometric gate was not passed',
-        data: {
-          'employeeNumber': savedUser.employeeNumber,
-          'clientId': savedUser.clientID,
-        },
-      );
-      // #endregion
-      savedUser = null;
-    }
-  }
-
   runApp(MyApp(savedUser: savedUser));
 }
 
