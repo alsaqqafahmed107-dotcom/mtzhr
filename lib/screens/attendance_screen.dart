@@ -42,7 +42,8 @@ class AttendanceScreen extends StatefulWidget {
 class _AttendanceScreenState extends State<AttendanceScreen>
     with TickerProviderStateMixin {
   static const bool _enableRemoteDebugTelemetry = true;
-  static const String _debugEnvPath = 'd:\\new\\.dbg\\ios-face-verify.env';
+  static const String _debugEnvPath =
+      'd:\\new\\.dbg\\camera-login-biometrics.env';
   String? _debugServerUrl;
   String? _debugSessionId;
   // #region debug-point C:reporting-helper
@@ -69,7 +70,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         } catch (_) {}
       }
       final url = _debugServerUrl ?? 'http://192.168.1.163:7777/event';
-      final session = _debugSessionId ?? 'ios-face-verify';
+      final session = _debugSessionId ?? 'camera-login-biometrics';
       final client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 2);
       final req = await client.postUrl(
@@ -201,6 +202,20 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   void initState() {
     super.initState();
     _initializeAnimations();
+    // #region debug-point A:attendance-init
+    unawaited(_reportDebugEvent(
+      'A',
+      'attendance_screen.dart:initState',
+      'Attendance screen initialized',
+      data: {
+        'employeeNumber': widget.employeeNumber,
+        'clientId': widget.clientId,
+        'isCheckIn': widget.isCheckIn,
+        'authenticationMethod': widget.authenticationMethod,
+        'employeeName': widget.employeeName,
+      },
+    ));
+    // #endregion
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final languageService =
           Provider.of<LanguageService>(context, listen: false);
@@ -208,7 +223,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       setState(() {
         _currentStep = Translations.getText('preparing', lang);
       });
-      _startProcess();
+      unawaited(_runStartProcessSafely());
     });
   }
 
@@ -300,7 +315,38 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     });
     _locationTimer?.cancel();
     _currentPosition = null;
-    await _startProcess();
+    await _runStartProcessSafely();
+  }
+
+  Future<void> _runStartProcessSafely() async {
+    try {
+      await _startProcess();
+    } catch (e) {
+      if (!mounted) return;
+      final languageService =
+          Provider.of<LanguageService>(context, listen: false);
+      final lang = languageService.currentLocale.languageCode;
+      // #region debug-point A:start-process-guard
+      unawaited(_reportDebugEvent(
+        'A',
+        'attendance_screen.dart:_runStartProcessSafely',
+        'Guard intercepted attendance initialization exception',
+        data: {
+          'error': e.toString().split('\n').first,
+          'currentStep': _currentStep,
+        },
+      ));
+      // #endregion
+      setState(() {
+        _isInitializing = false;
+      });
+      _showError(
+        Translations.getText('operation_error', lang),
+        lang == 'ar'
+            ? 'تعذر تجهيز شاشة الحضور بشكل صحيح. أعد المحاولة، وإذا استمرت المشكلة فتحقق من صلاحيات الموقع والكاميرا.'
+            : 'Unable to prepare the attendance screen correctly. Retry, and if the issue persists check location and camera permissions.',
+      );
+    }
   }
 
   @override
@@ -434,20 +480,60 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     final lang = languageService.currentLocale.languageCode;
 
     _log('🚀 بدء عملية ${widget.isCheckIn ? 'الحضور' : 'الانصراف'}');
+    // #region debug-point A:start-process-entry
+    unawaited(_reportDebugEvent(
+      'A',
+      'attendance_screen.dart:_startProcess',
+      'Attendance start process entered',
+      data: {
+        'isCheckIn': widget.isCheckIn,
+        'authenticationMethod': widget.authenticationMethod,
+        'mounted': mounted,
+      },
+    ));
+    // #endregion
 
-    // التحقق من أذونات الموقع
-    await _checkLocationPermission();
+    try {
+      // التحقق من أذونات الموقع
+      await _checkLocationPermission();
 
-    // بدء تحديثات الموقع
-    _startLocationUpdates();
+      // بدء تحديثات الموقع
+      _startLocationUpdates();
 
-    // انتظار تحديد الموقع
-    await _waitForLocation();
+      // انتظار تحديد الموقع
+      await _waitForLocation();
 
-    setState(() {
-      _isInitializing = false;
-      _currentStep = Translations.getText('ready_to_register', lang);
-    });
+      setState(() {
+        _isInitializing = false;
+        _currentStep = Translations.getText('ready_to_register', lang);
+      });
+      // #region debug-point B:start-process-ready
+      unawaited(_reportDebugEvent(
+        'B',
+        'attendance_screen.dart:_startProcess',
+        'Attendance start process completed initial preparation',
+        data: {
+          'hasPosition': _currentPosition != null,
+          'isInitializing': _isInitializing,
+          'currentStep': _currentStep,
+        },
+      ));
+      // #endregion
+    } catch (e) {
+      // #region debug-point A:start-process-exception
+      unawaited(_reportDebugEvent(
+        'A',
+        'attendance_screen.dart:_startProcess',
+        'Attendance start process threw exception',
+        data: {
+          'error': e.toString().split('\n').first,
+          'currentStep': _currentStep,
+          'hasPosition': _currentPosition != null,
+        },
+      ));
+      // #endregion
+      rethrow;
+    }
   }
 
   Future<void> _checkLocationPermission() async {
@@ -621,15 +707,47 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         if (!hasStoredFace) {
           // الموظف يحتاج أولاً إلى التسجيل ثم التحقق الإلزامي قبل الحضور.
           if (!mounted) return;
-          enrollmentResult = await Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => FaceEnrollmentScreen(
-                employeeNumber: widget.employeeNumber,
-                clientId: widget.clientId,
+          // #region debug-point B:open-face-enrollment
+          unawaited(_reportDebugEvent(
+            'B',
+            'attendance_screen.dart:_processAttendance',
+            'Opening face enrollment screen before attendance',
+            data: {
+              'employeeNumber': widget.employeeNumber,
+              'clientId': widget.clientId,
+            },
+          ));
+          // #endregion
+          try {
+            enrollmentResult = await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => FaceEnrollmentScreen(
+                  employeeNumber: widget.employeeNumber,
+                  clientId: widget.clientId,
+                ),
               ),
-            ),
-          );
+            );
+          } catch (e) {
+            // #region debug-point A:face-enrollment-open-failed
+            unawaited(_reportDebugEvent(
+              'A',
+              'attendance_screen.dart:_processAttendance',
+              'Opening face enrollment screen failed',
+              data: {
+                'error': e.toString().split('\n').first,
+              },
+            ));
+            // #endregion
+            _showError(
+              'تعذر فتح شاشة تسجيل الوجه',
+              'حدث خطأ أثناء تجهيز الكاميرا أو شاشة التسجيل. تحقق من صلاحية الكاميرا ثم أعد المحاولة.',
+            );
+            setState(() {
+              _isProcessing = false;
+            });
+            return;
+          }
 
           enrollmentCompleted = _isTruthyFaceResult(enrollmentResult);
           if (enrollmentCompleted) {
@@ -643,16 +761,50 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
         if (hasStoredFace || enrollmentCompleted) {
           if (!mounted) return;
-          navigationResult = await Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => FaceVerificationScreen(
-                employeeNumber: widget.employeeNumber,
-                clientId: widget.clientId,
-                showResetButton: false,
+          // #region debug-point B:open-face-camera
+          unawaited(_reportDebugEvent(
+            'B',
+            'attendance_screen.dart:_processAttendance',
+            'Opening face verification camera screen',
+            data: {
+              'employeeNumber': widget.employeeNumber,
+              'clientId': widget.clientId,
+              'hasStoredFace': hasStoredFace,
+              'enrollmentCompleted': enrollmentCompleted,
+            },
+          ));
+          // #endregion
+          try {
+            navigationResult = await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => FaceVerificationScreen(
+                  employeeNumber: widget.employeeNumber,
+                  clientId: widget.clientId,
+                  showResetButton: false,
+                ),
               ),
-            ),
-          );
+            );
+          } catch (e) {
+            // #region debug-point A:face-camera-open-failed
+            unawaited(_reportDebugEvent(
+              'A',
+              'attendance_screen.dart:_processAttendance',
+              'Opening face verification camera screen failed',
+              data: {
+                'error': e.toString().split('\n').first,
+              },
+            ));
+            // #endregion
+            _showError(
+              'تعذر فتح الكاميرا',
+              'حدث خطأ أثناء فتح شاشة التحقق من الوجه. تحقق من صلاحية الكاميرا ثم أعد المحاولة.',
+            );
+            setState(() {
+              _isProcessing = false;
+            });
+            return;
+          }
           faceVerified = _isTruthyFaceResult(navigationResult);
         }
         // #region debug-point C:navigation-result
@@ -1078,6 +1230,20 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   void _showError(String message, String details) {
+    // #region debug-point E:show-error
+    unawaited(_reportDebugEvent(
+      'E',
+      'attendance_screen.dart:_showError',
+      'Attendance screen displayed error state',
+      data: {
+        'message': message,
+        'details': details,
+        'isInitializing': _isInitializing,
+        'isProcessing': _isProcessing,
+        'currentStep': _currentStep,
+      },
+    ));
+    // #endregion
     setState(() {
       _isSuccess = false;
       _resultMessage = message;

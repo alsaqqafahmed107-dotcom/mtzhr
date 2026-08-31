@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
@@ -5,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:math';
 import 'dart:convert';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:http/http.dart' as http;
 
 import '../services/language_service.dart';
 import '../services/translations.dart';
@@ -16,8 +18,7 @@ import '../widgets/responsive_center.dart';
 import '../utils/platform_helper.dart';
 
 import '../services/api_service.dart';
-import '../services/face_api_service.dart';
-import 'face_enrollment_screen.dart';
+import '../services/biometric_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -28,6 +29,10 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen>
     with TickerProviderStateMixin {
+  static const bool _enableRemoteDebugTelemetry = true;
+  static const String _debugServerUrl = 'http://192.168.1.163:7777/event';
+  static const String _debugSessionId = 'camera-login-biometrics';
+
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _rememberMe = false;
@@ -56,6 +61,34 @@ class _LoginScreenState extends State<LoginScreen>
       print(message);
     }
   }
+
+  // #region debug-point C:reporting-helper
+  Future<void> _reportDebugEvent(
+    String hypothesisId,
+    String location,
+    String msg, {
+    Map<String, dynamic>? data,
+  }) async {
+    if (!_enableRemoteDebugTelemetry) return;
+    try {
+      await http.post(
+        Uri.parse(_debugServerUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'sessionId': _debugSessionId,
+          'runId': 'pre-fix',
+          'hypothesisId': hypothesisId,
+          'location': location,
+          'msg': '[DEBUG] $msg',
+          'data': data ?? const {},
+          'ts': DateTime.now().millisecondsSinceEpoch,
+          'traceId':
+              '${_emailController.text.trim()}-${DateTime.now().microsecondsSinceEpoch}',
+        }),
+      );
+    } catch (_) {}
+  }
+  // #endregion
 
   @override
   void initState() {
@@ -264,6 +297,32 @@ class _LoginScreenState extends State<LoginScreen>
         '${values[15].toRadixString(16).padLeft(2, '0')}';
   }
 
+  String _firstLoginBiometricKey(api_models.EmployeeData employee) {
+    return 'login_biometric_passed_${employee.clientID}_${employee.employeeNumber}';
+  }
+
+  String _buildBiometricUnavailableMessage(String lang) {
+    if (lang == 'ar') {
+      return 'لا يمكن تسجيل الدخول لأن هذا الجهاز لا يملك مصادقة بيومترية مفعّلة. فعّل Face ID أو Touch ID أو بصمة الإصبع أولاً.';
+    }
+    return 'Login is blocked because this device does not have an enrolled biometric. Enable Face ID, Touch ID, or fingerprint first.';
+  }
+
+  String _buildBiometricLoginFailedMessage(String lang) {
+    if (lang == 'ar') {
+      return 'فشل التحقق البيومتري لأول تسجيل دخول. لن يتم فتح الحساب حتى تنجح المصادقة المطلوبة.';
+    }
+    return 'First-login biometric verification failed. Account access is blocked until biometric authentication succeeds.';
+  }
+
+  Future<void> _clearSavedSessionOnly() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('user_data');
+      await prefs.setBool('is_logged_in', false);
+    } catch (_) {}
+  }
+
   Future<void> _handleLogin() async {
     final languageService =
         Provider.of<LanguageService>(context, listen: false);
@@ -282,6 +341,18 @@ class _LoginScreenState extends State<LoginScreen>
       _isLoading = true;
       _errorMessage = null;
     });
+    // #region debug-point C:login-start
+    unawaited(_reportDebugEvent(
+      'C',
+      'login_screen.dart:_handleLogin',
+      'Login flow started',
+      data: {
+        'email': _emailController.text.trim(),
+        'deviceType': _deviceType,
+        'hasDeviceUuid': _deviceUUID.isNotEmpty,
+      },
+    ));
+    // #endregion
 
     try {
       // استدعاء API
@@ -318,8 +389,8 @@ class _LoginScreenState extends State<LoginScreen>
           } else if (emp.secureApprovalToken != null &&
               emp.secureApprovalToken!.isNotEmpty) {
             try {
-              final decoded =
-                  SecureApprovalPermission.fromSecureJson(emp.secureApprovalToken!);
+              final decoded = SecureApprovalPermission.fromSecureJson(
+                  emp.secureApprovalToken!);
               if (decoded.isValid && decoded.verifySignatureIntegrity()) {
                 ApprovalPermissionService.updateCached(decoded);
                 try {
@@ -332,14 +403,15 @@ class _LoginScreenState extends State<LoginScreen>
             try {
               final probe = await ApiService.getPendingRequestsForApproval(
                 emp.clientID,
-                approverId:
-                    int.tryParse(emp.employeeNumber) ?? emp.employeeID,
-              ).timeout(
-                const Duration(seconds: 6),
-                onTimeout: () =>
-                    <String, dynamic>{'Success': false, 'Data': []},
-              ).catchError((_) =>
-                  <String, dynamic>{'Success': false, 'Data': []});
+                approverId: int.tryParse(emp.employeeNumber) ?? emp.employeeID,
+              )
+                  .timeout(
+                    const Duration(seconds: 6),
+                    onTimeout: () =>
+                        <String, dynamic>{'Success': false, 'Data': []},
+                  )
+                  .catchError(
+                      (_) => <String, dynamic>{'Success': false, 'Data': []});
               final probeData = probe['Data'] as List<dynamic>?;
               final serverAccess = probe['HasApprovalAccess'] == true ||
                   (probe['HasApprovalAccess'] is String &&
@@ -354,9 +426,7 @@ class _LoginScreenState extends State<LoginScreen>
                 rulesRaw: emp.rules,
                 serverApprovalAccess: probe['HasApprovalAccess'] == true ||
                     (probe['HasApprovalAccess'] is String &&
-                        probe['HasApprovalAccess']
-                            .toString()
-                            .toLowerCase() ==
+                        probe['HasApprovalAccess'].toString().toLowerCase() ==
                             'true'),
                 pendingApprovalItems: probeData ?? const [],
               );
@@ -369,11 +439,6 @@ class _LoginScreenState extends State<LoginScreen>
               ApprovalPermissionService.invalidateCache();
             }
           }
-
-          // حفظ البيانات إذا تم تحديد "تذكرني"
-          await _saveCredentials(effectiveEmployee);
-
-          // تسجيل الدخول ناجح
 
           // إظهار رسالة نجاح مؤقتة
           ScaffoldMessenger.of(context).showSnackBar(
@@ -411,6 +476,9 @@ class _LoginScreenState extends State<LoginScreen>
             lang,
           );
           if (!mounted || !canEnter) return;
+
+          // حفظ الجلسة فقط بعد اجتياز البوابة البيومترية بنجاح
+          await _saveCredentials(effectiveEmployee);
 
           Navigator.pushReplacement(
             context,
@@ -452,148 +520,129 @@ class _LoginScreenState extends State<LoginScreen>
       return true;
     }
 
-    // معرف تتبع التشخيصي (Trace ID)
-    final String tid = DateTime.now().millisecondsSinceEpoch.toRadixString(36);
-    if (kDebugMode) {
-      print('🔐 [LOGIN-FACE-T$tid] ═══════════════════════════════════');
-      print('🔐 [LOGIN-FACE-T$tid] بدء التأكد من تسجيل البصمة للموظف: ${employee.employeeNumber}');
-      print('🔐 [LOGIN-FACE-T$tid] ═══════════════════════════════════');
-    }
-
     try {
-      final faceStatus = await FaceApiService.getFaceStatus(
-        employee.clientID,
-        employee.employeeNumber,
+      final prefs = await SharedPreferences.getInstance();
+      final gateKey = _firstLoginBiometricKey(employee);
+      final alreadyVerified = prefs.getBool(gateKey) ?? false;
+
+      if (alreadyVerified) {
+        // #region debug-point D:login-gate-already-passed
+        unawaited(_reportDebugEvent(
+          'D',
+          'login_screen.dart:_ensureFaceEnrollmentIfNeeded',
+          'First-login biometric gate already passed on this device',
+          data: {
+            'employeeNumber': employee.employeeNumber,
+            'clientId': employee.clientID,
+          },
+        ));
+        // #endregion
+        return true;
+      }
+
+      final localDeviceSupported = await BiometricService.isDeviceSupported();
+      final localCanCheck = await BiometricService.canCheckBiometrics();
+      final localHasEnrolled = await BiometricService.hasEnrolledBiometrics();
+      final availableBiometrics =
+          await BiometricService.getAvailableBiometrics();
+      // #region debug-point D:login-local-biometric-state
+      unawaited(_reportDebugEvent(
+        'D',
+        'login_screen.dart:_ensureFaceEnrollmentIfNeeded',
+        'Collected local biometric state before first-login gate',
+        data: {
+          'employeeNumber': employee.employeeNumber,
+          'clientId': employee.clientID,
+          'deviceSupported': localDeviceSupported,
+          'canCheckBiometrics': localCanCheck,
+          'hasEnrolledBiometrics': localHasEnrolled,
+          'availableBiometrics':
+              availableBiometrics.map((b) => b.name).toList(),
+          'alreadyVerified': alreadyVerified,
+        },
+      ));
+      // #endregion
+
+      final biometricReady = localDeviceSupported &&
+          localCanCheck &&
+          localHasEnrolled &&
+          availableBiometrics.isNotEmpty;
+
+      if (!biometricReady) {
+        await _clearSavedSessionOnly();
+        if (!mounted) return false;
+        setState(() {
+          _errorMessage = _buildBiometricUnavailableMessage(lang);
+        });
+        // #region debug-point C:login-blocked-no-biometric
+        unawaited(_reportDebugEvent(
+          'C',
+          'login_screen.dart:_ensureFaceEnrollmentIfNeeded',
+          'Blocked login because no enrolled local biometric exists',
+          data: {
+            'employeeNumber': employee.employeeNumber,
+            'deviceSupported': localDeviceSupported,
+            'canCheckBiometrics': localCanCheck,
+            'hasEnrolledBiometrics': localHasEnrolled,
+          },
+        ));
+        // #endregion
+        return false;
+      }
+
+      final authenticated = await BiometricService.authenticateForLogin(
+        employeeName: employee.name,
       );
-
-      if (faceStatus['Success'] != true) {
-        if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] فشل getFaceStatus (خطأ سيرفر) → سمح بالدخول كحماية (fallback safe).');
-        return true;
+      if (!authenticated) {
+        await _clearSavedSessionOnly();
+        if (!mounted) return false;
+        setState(() {
+          _errorMessage = _buildBiometricLoginFailedMessage(lang);
+        });
+        // #region debug-point C:login-blocked-auth-failed
+        unawaited(_reportDebugEvent(
+          'C',
+          'login_screen.dart:_ensureFaceEnrollmentIfNeeded',
+          'Blocked login because first-login biometric authentication failed',
+          data: {
+            'employeeNumber': employee.employeeNumber,
+          },
+        ));
+        // #endregion
+        return false;
       }
 
-      final attendanceMethod =
-          int.tryParse(faceStatus['AttendanceMethod']?.toString() ?? '0') ?? 0;
-      final shouldRequireFace = faceStatus['ForceEnroll'] == true ||
-          faceStatus['IsFaceRequired'] == true ||
-          attendanceMethod == 1 ||
-          attendanceMethod == 2;
-
-      final hasTemplate = faceStatus['HasFaceTemplate'] == true;
-
-      if (kDebugMode) {
-        print('🔐 [LOGIN-FACE-T$tid] Status: shouldRequireFace=$shouldRequireFace | hasTemplate=$hasTemplate | AttendanceMethod=$attendanceMethod');
-      }
-
-      if (!shouldRequireFace || hasTemplate) {
-        if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] لا تحتاج للتسجيل أو مسجل بالفعل → نسمح بالدخول ✅');
-        return true;
-      }
-
-      // ==========================================
-      // 🛡️ نظام QUADRUPLE FAILSAFE لقبول نتيجة التسجيل
-      // ==========================================
-      // 1. النتيجة الأساسية من Navigator (إذا نجحت)
-      // 2. Flexible Truthy Check (قبول أي قيمة صحيحة حتى لو لم تكن bool صريحة)
-      // 3. Fallback 1: Global Static Flag مباشرة بعد Navigator
-      // 4. Fallback 2: تأخير 600ms ثم فحص العلامة العالمية مرة أخرى + (اختياري) إعادة فحص HasFaceTemplate من السيرفر
-      // ==========================================
-      if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] يحتاج تسجيل بصمة → فتح شاشة التسجيل...');
-      Object? navResultRaw;
-      try {
-        navResultRaw = await Navigator.push<Object?>(
-          context,
-          MaterialPageRoute(
-            builder: (context) => FaceEnrollmentScreen(
-              employeeNumber: employee.employeeNumber,
-              clientId: employee.clientID,
-            ),
-          ),
-        );
-      } catch (navErr, stack) {
-        if (kDebugMode) {
-          print('🔐 [LOGIN-FACE-T$tid] ❌ استثناء أثناء Navigator.push للشاشة: $navErr');
-          print('🔐 [LOGIN-FACE-T$tid] Stack: $stack');
-        }
-        navResultRaw = null;
-      }
-
-      // 1 + 2: Flexible Truthy Check للنتيجة المرتجعة
-      bool enrolled = false;
-      if (navResultRaw != null) {
-        if (navResultRaw is bool) {
-          enrolled = navResultRaw;
-        } else if (navResultRaw is Map) {
-          enrolled = (navResultRaw['Success'] == true || navResultRaw['success'] == true || navResultRaw['Enrolled'] == true);
-        } else {
-          enrolled = navResultRaw.toString().toLowerCase() == 'true' || navResultRaw.toString().trim().isNotEmpty;
-        }
-      }
-      if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] النتيجة من Navigator: ${navResultRaw.runtimeType} = $navResultRaw | enrolled (بعد Flexible) = $enrolled');
-
-      // 3. Fallback 1: Global Flag مباشرة
-      if (!enrolled) {
-        final fallback1 = FaceApiService.verifyLastFaceSessionSuccess(employeeNumber: employee.employeeNumber);
-        if (fallback1) {
-          enrolled = true;
-          FaceApiService.clearLastFaceSession();
-          if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] 🛡️ Fallback 1 (Global Flag مباشر): تم تفعيله ✅');
-        }
-      }
-
-      // 4. Fallback 2: تأخير 600ms + إعادة فحص
-      if (!enrolled) {
-        await Future.delayed(const Duration(milliseconds: 600));
-        final fallback2 = FaceApiService.verifyLastFaceSessionSuccess(employeeNumber: employee.employeeNumber);
-        if (fallback2) {
-          enrolled = true;
-          FaceApiService.clearLastFaceSession();
-          if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] 🛡️🛡️ Fallback 2 (Global Flag بعد 600ms): تم تفعيله ✅');
-        } else {
-          // 🛡️ طبقة حماية خامسة: إعادة فحص HasFaceTemplate من السيرفر مباشرة
-          // لأن التسجيل ربما تم بنجاح في قاعدة البيانات ولكن Navigator لم يرجع القيمة!
-          if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] ⚠️ جميع الفحوصات السابقة فشلت → إعادة جلب HasFaceTemplate من السيرفر مباشرة (أمان نهائي)...');
-          try {
-            final recheck = await FaceApiService.getFaceStatus(
-              employee.clientID,
-              employee.employeeNumber,
-            ).timeout(const Duration(seconds: 10));
-            if (recheck['Success'] == true && recheck['HasFaceTemplate'] == true) {
-              enrolled = true;
-              if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] 🛡️🛡️🛡️ Fallback 3 (إعادة الفحص من السيرفر): HasFaceTemplate=TRUE → نجح التسجيل فعلاً في قاعدة البيانات ✅');
-            }
-          } catch (recheckErr) {
-            if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] فشل إعادة الفحص من السيرفر: $recheckErr');
-          }
-        }
-      }
-
-      if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] النتيجة النهائية enrolled=$enrolled');
-
-      if (!enrolled && mounted) {
-        try {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                Translations.getText('face_mgmt_login_enroll_required', lang),
-              ),
-              backgroundColor: Colors.red,
-              duration: const Duration(seconds: 5),
-            ),
-          );
-        } catch (snackErr) {
-          if (kDebugMode) print('🔐 [LOGIN-FACE-T$tid] فشل عرض SnackBar (مشكلة في Scaffold Context): $snackErr');
-        }
-      } else if (enrolled && kDebugMode) {
-        print('🔐 [LOGIN-FACE-T$tid] 🟢 تسجيل البصمة نجح! سيسمح للمستخدم بالدخول الآن.');
-      }
-
-      return enrolled;
-    } catch (e, stack) {
-      if (kDebugMode) {
-        print('🔐 [LOGIN-FACE-T$tid] ❌ استثناء عام في _ensureFaceEnrollmentIfNeeded: $e');
-        print('🔐 [LOGIN-FACE-T$tid] Stack: $stack');
-      }
-      return true; // حماية: سماح بالدخول دائماً عند خطأ برمجي (لا نحجز المستخدم)
+      await prefs.setBool(gateKey, true);
+      // #region debug-point D:login-gate-passed
+      unawaited(_reportDebugEvent(
+        'D',
+        'login_screen.dart:_ensureFaceEnrollmentIfNeeded',
+        'First-login biometric gate passed and was persisted',
+        data: {
+          'employeeNumber': employee.employeeNumber,
+          'clientId': employee.clientID,
+        },
+      ));
+      // #endregion
+      return true;
+    } catch (e) {
+      await _clearSavedSessionOnly();
+      if (!mounted) return false;
+      setState(() {
+        _errorMessage = _buildBiometricLoginFailedMessage(lang);
+      });
+      // #region debug-point E:login-exception-blocked
+      unawaited(_reportDebugEvent(
+        'E',
+        'login_screen.dart:_ensureFaceEnrollmentIfNeeded',
+        'Login biometric gate threw exception and blocked entry',
+        data: {
+          'employeeNumber': employee.employeeNumber,
+          'error': e.toString().split('\n').first,
+        },
+      ));
+      // #endregion
+      return false;
     }
   }
 

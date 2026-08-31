@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/login_screen.dart';
@@ -14,8 +15,69 @@ import 'models/api_models.dart' as api_models;
 import 'screens/home_screen.dart';
 import 'package:url_strategy/url_strategy.dart';
 
+const bool _enableRemoteDebugTelemetry = true;
+const String _debugServerUrl = 'http://192.168.1.163:7777/event';
+const String _debugSessionId = 'camera-login-biometrics';
+
+// #region debug-point A:reporting-helper
+Future<void> _reportDebugEvent(
+  String hypothesisId,
+  String location,
+  String msg, {
+  Map<String, dynamic>? data,
+}) async {
+  if (!_enableRemoteDebugTelemetry) return;
+  try {
+    await http.post(
+      Uri.parse(_debugServerUrl),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'sessionId': _debugSessionId,
+        'runId': 'pre-fix',
+        'hypothesisId': hypothesisId,
+        'location': location,
+        'msg': '[DEBUG] $msg',
+        'data': data ?? const {},
+        'ts': DateTime.now().millisecondsSinceEpoch,
+      }),
+    );
+  } catch (_) {}
+}
+// #endregion
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  FlutterError.onError = (FlutterErrorDetails details) {
+    // #region debug-point A:flutter-error
+    _reportDebugEvent(
+      'A',
+      'main.dart:FlutterError.onError',
+      'Flutter framework error captured',
+      data: {
+        'exception': details.exceptionAsString(),
+        'library': details.library,
+        'context': details.context?.toDescription(),
+      },
+    );
+    // #endregion
+    FlutterError.presentError(details);
+  };
+
+  PlatformDispatcher.instance.onError = (error, stack) {
+    // #region debug-point A:platform-error
+    _reportDebugEvent(
+      'A',
+      'main.dart:PlatformDispatcher.onError',
+      'Platform dispatcher error captured',
+      data: {
+        'error': error.toString(),
+        'stackHead': stack.toString().split('\n').take(6).join('\n'),
+      },
+    );
+    // #endregion
+    return false;
+  };
 
   // تهيئة خدمة الإشعارات
   await NotificationService().initialize();
@@ -32,7 +94,7 @@ void main() async {
   final prefs = await SharedPreferences.getInstance();
   final bool isLoggedIn = prefs.getBool('is_logged_in') ?? false;
   final String? userDataJson = prefs.getString('user_data');
-  
+
   api_models.EmployeeData? savedUser;
   if (isLoggedIn && userDataJson != null) {
     try {
@@ -43,12 +105,34 @@ void main() async {
     }
   }
 
+  if (!kIsWeb && savedUser != null) {
+    final gateKey =
+        'login_biometric_passed_${savedUser.clientID}_${savedUser.employeeNumber}';
+    final gatePassed = prefs.getBool(gateKey) ?? false;
+    if (!gatePassed) {
+      await prefs.remove('user_data');
+      await prefs.setBool('is_logged_in', false);
+      // #region debug-point C:auto-login-blocked
+      await _reportDebugEvent(
+        'C',
+        'main.dart:bootstrap',
+        'Blocked auto-login because first-login biometric gate was not passed',
+        data: {
+          'employeeNumber': savedUser.employeeNumber,
+          'clientId': savedUser.clientID,
+        },
+      );
+      // #endregion
+      savedUser = null;
+    }
+  }
+
   runApp(MyApp(savedUser: savedUser));
 }
 
 class MyApp extends StatelessWidget {
   final api_models.EmployeeData? savedUser;
-  
+
   const MyApp({super.key, this.savedUser});
 
   @override

@@ -90,6 +90,41 @@ class BiometricService {
     }
   }
 
+  // التحقق البيومتري لأول دخول إلى التطبيق
+  static Future<bool> authenticateForLogin({
+    String? employeeName,
+  }) async {
+    if (kIsWeb) return false;
+    try {
+      final deviceSupported = await _localAuth.isDeviceSupported();
+      final availableBiometrics = await _localAuth.getAvailableBiometrics();
+      if (!deviceSupported || availableBiometrics.isEmpty) {
+        _log(
+            '❌ BiometricService: المصادقة البيومترية غير جاهزة لأول تسجيل دخول');
+        return false;
+      }
+
+      final employee = employeeName?.trim().isNotEmpty == true
+          ? employeeName!.trim()
+          : 'الموظف';
+
+      final result = await _localAuth.authenticate(
+        localizedReason:
+            'يرجى التحقق بالوجه أو البصمة لإكمال أول تسجيل دخول - $employee',
+        options: const AuthenticationOptions(
+          biometricOnly: true,
+          stickyAuth: true,
+        ),
+      );
+
+      _log('🔐 BiometricService: نتيجة التحقق لأول تسجيل دخول: $result');
+      return result;
+    } catch (e) {
+      _log('💥 BiometricService: خطأ في التحقق البيومتري لأول دخول: $e');
+      return false;
+    }
+  }
+
   // تسجيل البصمة مع خيارات بديلة
   static Future<String?> registerFingerprint(String reason) async {
     if (kIsWeb) return null;
