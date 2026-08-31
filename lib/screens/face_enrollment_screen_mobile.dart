@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:image/image.dart' as img;
 import 'package:provider/provider.dart';
 import '../services/face_api_service.dart';
 import '../services/language_service.dart';
@@ -331,6 +332,67 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
     }
 
     return false;
+  }
+
+  Future<Uint8List> _prepareImageBytesForServerUpload(
+    Uint8List originalBytes, {
+    required String purpose,
+  }) async {
+    if (!Platform.isIOS) {
+      return originalBytes;
+    }
+
+    try {
+      final decoded = img.decodeImage(originalBytes);
+      if (decoded == null) {
+        unawaited(_reportDebugEvent(
+          'E',
+          'face_enrollment_screen_mobile.dart:_prepareImageBytesForServerUpload',
+          'Failed to decode iPhone image before upload; using original bytes',
+          data: {
+            'purpose': purpose,
+            'originalKb': originalBytes.length ~/ 1024,
+          },
+        ));
+        return originalBytes;
+      }
+
+      var normalized = img.bakeOrientation(decoded);
+      final isFrontCamera =
+          _controller?.description.lensDirection == CameraLensDirection.front;
+      if (isFrontCamera) {
+        normalized = img.flipHorizontal(normalized);
+      }
+
+      final encoded = Uint8List.fromList(
+        img.encodeJpg(normalized, quality: 92),
+      );
+      unawaited(_reportDebugEvent(
+        'E',
+        'face_enrollment_screen_mobile.dart:_prepareImageBytesForServerUpload',
+        'Normalized iPhone image before upload',
+        data: {
+          'purpose': purpose,
+          'originalKb': originalBytes.length ~/ 1024,
+          'normalizedKb': encoded.length ~/ 1024,
+          'isFrontCamera': isFrontCamera,
+          'width': normalized.width,
+          'height': normalized.height,
+        },
+      ));
+      return encoded;
+    } catch (e) {
+      unawaited(_reportDebugEvent(
+        'E',
+        'face_enrollment_screen_mobile.dart:_prepareImageBytesForServerUpload',
+        'Image normalization failed; using original iPhone bytes',
+        data: {
+          'purpose': purpose,
+          'error': e.toString().split('\n').first,
+        },
+      ));
+      return originalBytes;
+    }
   }
 
   Future<XFile?> _tryTakePictureOrNull({required int timeoutMs}) async {
@@ -971,7 +1033,11 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       // المرحلة 3: Base64 + Metadata (GDPR + خصوصية الصور)
       // ----------------------------------------------------
       phase = 'BASE64_ENCODE';
-      final base64Image = base64Encode(finalImageBytes!);
+      final uploadBytes = await _prepareImageBytesForServerUpload(
+        finalImageBytes!,
+        purpose: 'enrollment',
+      );
+      final base64Image = base64Encode(uploadBytes);
       final metadata = {
         // نبقي الـ DeviceInfo صغيراً جداً لأن بعض إصدارات الـ API القديمة
         // كانت تحفظه في عمود محدود الحجم وتفشل برسالة:
@@ -982,11 +1048,13 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
         'consentApproved': true,
         'retentionYears': 5,
         'flowVersion': 'ENROLL_V1',
+        'captureBytesKb': finalImageBytes!.length ~/ 1024,
+        'uploadBytesKb': uploadBytes.length ~/ 1024,
       };
       final t3 = DateTime.now().difference(perfTrace).inMilliseconds;
       if (kDebugMode) {
         print(
-            '💾 [$tid] (${t3}ms) PHASE 3 OK: Base64 (${base64Image.length ~/ 1024}KB) + Metadata');
+            '💾 [$tid] (${t3}ms) PHASE 3 OK: Base64 (${base64Image.length ~/ 1024}KB) + Metadata | upload=${uploadBytes.length ~/ 1024}KB');
       }
 
       // ----------------------------------------------------

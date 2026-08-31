@@ -71,6 +71,7 @@ dependencies:
   # Camera and AI
   camera: ^0.11.0+1
   google_mlkit_face_detection: ^0.12.0
+  image: ^4.5.4
   
   # Web UX: clean URLs (no #)
   url_strategy: ^0.3.0

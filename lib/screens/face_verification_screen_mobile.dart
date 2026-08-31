@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:image/image.dart' as img;
 import 'package:provider/provider.dart';
 import '../services/face_api_service.dart';
 import '../services/language_service.dart';
@@ -436,6 +437,67 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     ));
     // #endregion
     return false;
+  }
+
+  Future<Uint8List> _prepareImageBytesForServerUpload(
+    Uint8List originalBytes, {
+    required String purpose,
+  }) async {
+    if (!Platform.isIOS) {
+      return originalBytes;
+    }
+
+    try {
+      final decoded = img.decodeImage(originalBytes);
+      if (decoded == null) {
+        unawaited(_reportDebugEvent(
+          'E',
+          'face_verification_screen_mobile.dart:_prepareImageBytesForServerUpload',
+          'Failed to decode iPhone image before upload; using original bytes',
+          data: {
+            'purpose': purpose,
+            'originalKb': originalBytes.length ~/ 1024,
+          },
+        ));
+        return originalBytes;
+      }
+
+      var normalized = img.bakeOrientation(decoded);
+      final isFrontCamera =
+          _controller?.description.lensDirection == CameraLensDirection.front;
+      if (isFrontCamera) {
+        normalized = img.flipHorizontal(normalized);
+      }
+
+      final encoded = Uint8List.fromList(
+        img.encodeJpg(normalized, quality: 92),
+      );
+      unawaited(_reportDebugEvent(
+        'E',
+        'face_verification_screen_mobile.dart:_prepareImageBytesForServerUpload',
+        'Normalized iPhone image before upload',
+        data: {
+          'purpose': purpose,
+          'originalKb': originalBytes.length ~/ 1024,
+          'normalizedKb': encoded.length ~/ 1024,
+          'isFrontCamera': isFrontCamera,
+          'width': normalized.width,
+          'height': normalized.height,
+        },
+      ));
+      return encoded;
+    } catch (e) {
+      unawaited(_reportDebugEvent(
+        'E',
+        'face_verification_screen_mobile.dart:_prepareImageBytesForServerUpload',
+        'Image normalization failed; using original iPhone bytes',
+        data: {
+          'purpose': purpose,
+          'error': e.toString().split('\n').first,
+        },
+      ));
+      return originalBytes;
+    }
   }
 
   Future<XFile?> _tryTakePictureOrNull({required int timeoutMs}) async {
@@ -1342,7 +1404,11 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
       // 🔍 المرحلة 4: Base64 + Metadata (إصلاح sessionDuration + معلومات Fallback)
       phase = 'BASE64_ENCODE';
-      final base64Image = base64Encode(finalImageBytes!);
+      final uploadBytes = await _prepareImageBytesForServerUpload(
+        finalImageBytes!,
+        purpose: 'verification',
+      );
+      final base64Image = base64Encode(uploadBytes);
       final snapshotForVerification = _displaySnapshot;
       final livenessMetadata = {
         'livenessScore': livenessResult.livenessScore,
@@ -1369,11 +1435,13 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         'imageSource': fallbackUsed,
         'capturedFallbackUsed': fallbackUsed != 'DIRECT',
         'platform': Platform.operatingSystem,
+        'captureBytesKb': finalImageBytes!.length ~/ 1024,
+        'uploadBytesKb': uploadBytes.length ~/ 1024,
       };
       final t4 = DateTime.now().difference(perfTrace).inMilliseconds;
       if (kDebugMode) {
         print(
-            '⚡ [VERIFY-PERF] (${t4}ms) PHASE 4 OK: Base64 + Metadata | حجم الصورة=${finalImageBytes!.length ~/ 1024}KB');
+            '⚡ [VERIFY-PERF] (${t4}ms) PHASE 4 OK: Base64 + Metadata | حجم الصورة المرفوعة=${uploadBytes.length ~/ 1024}KB');
       }
       // #region debug-point A:verification-payload
       unawaited(_reportDebugEvent(
@@ -1384,7 +1452,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           'platform': Platform.operatingSystem,
           'imageSource': fallbackUsed,
           'capturedFallbackUsed': fallbackUsed != 'DIRECT',
-          'imageKb': finalImageBytes!.length ~/ 1024,
+          'captureImageKb': finalImageBytes!.length ~/ 1024,
+          'uploadImageKb': uploadBytes.length ~/ 1024,
           'headY': headY,
           'headX': headX,
           'livenessScore': livenessResult.livenessScore,
