@@ -43,7 +43,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     with TickerProviderStateMixin {
   static const bool _enableRemoteDebugTelemetry = true;
   static const String _debugEnvPath =
-      'd:\\new\\.dbg\\attendance-post-verify-fail.env';
+      'd:\\new\\.dbg\\ios-face-verify.env';
   String? _debugServerUrl;
   String? _debugSessionId;
   // #region debug-point C:reporting-helper
@@ -70,7 +70,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         } catch (_) {}
       }
       final url = _debugServerUrl ?? 'http://192.168.1.163:7777/event';
-      final session = _debugSessionId ?? 'attendance-post-verify-fail';
+      final session = _debugSessionId ?? 'ios-face-verify';
       final client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 2);
       final req = await client.postUrl(
@@ -804,6 +804,23 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               : !hasStoredFace && enrollmentCompleted
                   ? 'تم تسجيل الوجه بنجاح، لكن التحقق الإلزامي بعد التسجيل لم يكتمل أو لم تصل نتيجته إلى شاشة الحضور.$hint'
                   : 'بصمة الوجه مسجلة لهذا الموظف، لكن المطابقة الحالية لم تنجح أو لم تصل نتيجة النجاح إلى شاشة الحضور.$hint\nإذا ظهرت داخل شاشة البصمة رسالة مثل "لا تتطابق" أو نسبة تشابه منخفضة، فهذا يعني أن الموظف مسجل فعلاً ولكن المطابقة فشلت بسبب اختلاف الصورة الحالية عن الصورة المحفوظة.${serverHint.isNotEmpty ? "\nرسالة الخادم: $serverHint" : ""}';
+          // #region debug-point E:attendance-face-rejected
+          unawaited(_reportDebugEvent(
+            'E',
+            'attendance_screen.dart:_processAttendance',
+            'Attendance rejected after face verification flow',
+            data: {
+              'platform': Platform.operatingSystem,
+              'navigationResultType': navigationResult.runtimeType.toString(),
+              'navigationResultValue': navigationResult?.toString(),
+              'serverHint': serverHint,
+              'hasStoredFace': hasStoredFace,
+              'enrollmentCompleted': enrollmentCompleted,
+              'faceVerified': faceVerified,
+              'proof': _faceVerificationProof?.toString(),
+            },
+          ));
+          // #endregion
           _showError(
             'فشل التحقق من الوجه',
             verificationMessage,

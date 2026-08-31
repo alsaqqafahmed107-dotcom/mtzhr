@@ -34,7 +34,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     with WidgetsBindingObserver {
   static const bool _enableRemoteDebugTelemetry = true;
   static const String _debugEnvPath =
-      'd:\\new\\.dbg\\face-verification-error.env';
+      'd:\\new\\.dbg\\ios-face-verify.env';
   String? _debugServerUrl;
   String? _debugSessionId;
   // #region debug-point A:reporting-helper
@@ -61,7 +61,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         } catch (_) {}
       }
       final url = _debugServerUrl ?? 'http://192.168.1.163:7777/event';
-      final session = _debugSessionId ?? 'face-verification-error';
+      final session = _debugSessionId ?? 'ios-face-verify';
       final client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 2);
       final req = await client.postUrl(
@@ -1148,6 +1148,24 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         print(
             '⚡ [VERIFY-PERF] (${t4}ms) PHASE 4 OK: Base64 + Metadata | حجم الصورة=${finalImageBytes!.length ~/ 1024}KB');
       }
+      // #region debug-point A:verification-payload
+      unawaited(_reportDebugEvent(
+        'A',
+        'face_verification_screen_mobile.dart:_captureAndVerifyWithLiveness',
+        'Prepared verification payload for server',
+        data: {
+          'platform': Platform.operatingSystem,
+          'imageSource': fallbackUsed,
+          'capturedFallbackUsed': fallbackUsed != 'DIRECT',
+          'imageKb': finalImageBytes!.length ~/ 1024,
+          'headY': headY,
+          'headX': headX,
+          'livenessScore': livenessResult.livenessScore,
+          'completedSignals': snapshotForVerification.completedSignals,
+          'requiredSignals': snapshotForVerification.requiredSignals,
+        },
+      ));
+      // #endregion
 
       // 🔍 المرحلة 5: Retry ذكي لإرسال التحقق (3 محاولات بدون إعادة Liveness!)
       phase = 'VERIFY_API_SEND';
@@ -1302,6 +1320,20 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           print('✅ DIAGNOSTIC [VERIFY-SUCCESS] ═══════════════════');
         }
         if (mounted) {
+          // #region debug-point C:verification-success
+          unawaited(_reportDebugEvent(
+            'C',
+            'face_verification_screen_mobile.dart:_captureAndVerifyWithLiveness',
+            'Verification flow finished successfully',
+            data: {
+              'platform': Platform.operatingSystem,
+              'confidenceScore': finalResult!['ConfidenceScore'],
+              'livenessScore': finalResult!['LivenessScore'],
+              'serverMessage': finalResult!['Message']?.toString(),
+              'reason': 'verify-success',
+            },
+          ));
+          // #endregion
           setState(() {
             _borderColor = Colors.green;
             _statusMessage = _t('verification_success');
@@ -1322,6 +1354,20 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         }
       } else {
         final msg = lastApiErr ?? _t('verification_failed');
+        // #region debug-point E:verification-failed-final
+        unawaited(_reportDebugEvent(
+          'E',
+          'face_verification_screen_mobile.dart:_captureAndVerifyWithLiveness',
+          'Verification flow ended without accepted match',
+          data: {
+            'platform': Platform.operatingSystem,
+            'lastApiError': lastApiErr,
+            'finalResultType': finalResult.runtimeType.toString(),
+            'finalResultValue': finalResult?.toString(),
+            'verifyAttempt': verifyAttempt,
+          },
+        ));
+        // #endregion
         if (kDebugMode) {
           print(
               '❌ [VERIFY-PERF] فشل نهائي بعد $maxAttempts محاولات. السبب الأخير: $msg');
