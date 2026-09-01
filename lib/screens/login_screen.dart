@@ -19,7 +19,7 @@ import '../utils/platform_helper.dart';
 
 import '../services/api_service.dart';
 import '../services/face_api_service.dart';
-import 'face_verification_screen.dart';
+import 'face_enrollment_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -521,42 +521,66 @@ class _LoginScreenState extends State<LoginScreen>
       },
     ));
 
-    if (faceStatus['Success'] != true || !hasStoredFace) {
+    if (faceStatus['Success'] != true) {
+      final statusMessage =
+          (faceStatus['Message'] ?? '').toString().trim();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              lang == 'ar'
+                  ? (statusMessage.isNotEmpty
+                      ? 'تعذر التحقق من حالة بصمة الوجه: $statusMessage'
+                      : 'تعذر التحقق من حالة بصمة الوجه حالياً. تأكد من اتصال التطبيق بالخادم ثم أعد المحاولة.')
+                  : (statusMessage.isNotEmpty
+                      ? 'Unable to check face registration status: $statusMessage'
+                      : 'Unable to check face registration status right now. Please verify the app can reach the server and try again.'),
+              style: const TextStyle(fontFamily: 'Tajawal'),
+            ),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return false;
+    }
+
+    if (hasStoredFace) {
       return true;
     }
 
     if (!mounted) return false;
 
-    final verificationResult = await Navigator.push(
+    final enrollmentResult = await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => FaceVerificationScreen(
+        builder: (context) => FaceEnrollmentScreen(
           employeeNumber: employee.employeeNumber,
           clientId: employee.clientID,
-          showResetButton: false,
         ),
       ),
     );
 
-    final verified = verificationResult is Map &&
-        (verificationResult['Success'] == true ||
-            verificationResult['Matched'] == true ||
-            verificationResult['Completed'] == true ||
-            verificationResult['Verified'] == true);
+    final enrolled = enrollmentResult == true ||
+        (enrollmentResult is Map &&
+            (enrollmentResult['Success'] == true ||
+                enrollmentResult['Completed'] == true ||
+                enrollmentResult['Enrolled'] == true ||
+                enrollmentResult['Saved'] == true));
 
     unawaited(_reportDebugEvent(
       'D',
       'login_screen.dart:_ensureFaceEnrollmentIfNeeded',
-      'Completed face verification gate after login',
+      'Completed face enrollment gate after login',
       data: {
         'employeeNumber': employee.employeeNumber,
         'clientId': employee.clientID,
-        'verified': verified,
-        'verificationResult': verificationResult?.toString(),
+        'enrolled': enrolled,
+        'enrollmentResult': enrollmentResult?.toString(),
       },
     ));
 
-    if (verified) {
+    if (enrolled) {
       return true;
     }
 
@@ -565,8 +589,8 @@ class _LoginScreenState extends State<LoginScreen>
         SnackBar(
           content: Text(
             lang == 'ar'
-                ? 'فشل التحقق من بصمة الوجه، لذلك لن يتم إدخالك إلى التطبيق حالياً.'
-                : 'Face verification failed, so access to the app was not granted.',
+                ? 'يجب تسجيل بصمة الوجه بنجاح قبل الدخول إلى التطبيق.'
+                : 'Face enrollment must complete successfully before entering the app.',
             style: const TextStyle(fontFamily: 'Tajawal'),
           ),
           backgroundColor: Colors.red,
