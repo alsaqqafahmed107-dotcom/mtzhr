@@ -876,13 +876,29 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
     final double headY = face.headEulerAngleY ?? 0;
     final double headX = face.headEulerAngleX ?? 0;
     if (headY.abs() > 25 || headX.abs() > 25) return false;
-    final double leftEye = face.leftEyeOpenProbability ?? 1.0;
-    final double rightEye = face.rightEyeOpenProbability ?? 1.0;
-    if (leftEye < 0.2 || rightEye < 0.2) return false;
+    if (!_passesEyeOpennessForEnrollment(face)) return false;
     final double w = face.boundingBox.width;
     final double h = face.boundingBox.height;
     if (w < 100 || h < 120) return false;
     return true;
+  }
+
+  bool _passesEyeOpennessForEnrollment(Face face) {
+    final left = face.leftEyeOpenProbability;
+    final right = face.rightEyeOpenProbability;
+
+    // على iPhone تقدير فتح العين من ML Kit يتذبذب أكثر من Android،
+    // لذلك لا نرفض الصورة إلا إذا كانت الدلالات قوية على أن العينين مغلقتان فعلاً.
+    if (Platform.isIOS) {
+      if (left == null && right == null) return true;
+      final leftClosed = left != null && left < 0.08;
+      final rightClosed = right != null && right < 0.08;
+      return !(leftClosed && rightClosed);
+    }
+
+    final double leftEye = left ?? 1.0;
+    final double rightEye = right ?? 1.0;
+    return leftEye >= 0.2 && rightEye >= 0.2;
   }
 
   // =========================================================
@@ -905,7 +921,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       } else if (_currentHeadX.abs() > 25) {
         newHint = '↕️ انظر مباشرة إلى الأمام (لا تنظر للأعلى أو للأسفل)';
         newBorder = Colors.orange;
-      } else if (_currentLeftEyeOpen < 0.3 || _currentRightEyeOpen < 0.3) {
+      } else if (!Platform.isIOS &&
+          (_currentLeftEyeOpen < 0.3 || _currentRightEyeOpen < 0.3)) {
         newHint = '👀 افتح عينيك بوضوح أثناء التقاط الصورة';
         newBorder = Colors.orange;
       } else if (!isPoseValid) {
@@ -1073,7 +1090,7 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       if (headY.abs() > 25 || headX.abs() > 25) {
         throw StateError(_t('look_straight_no_tilt'));
       }
-      if ((finalFace!.leftEyeOpenProbability ?? 1.0) < 0.2) {
+      if (!_passesEyeOpennessForEnrollment(finalFace!)) {
         throw StateError(_t('open_eyes_clearly_for_photo'));
       }
       final t2 = DateTime.now().difference(perfTrace).inMilliseconds;
