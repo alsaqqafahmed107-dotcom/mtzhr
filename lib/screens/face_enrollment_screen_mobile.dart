@@ -109,6 +109,9 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   Timer? _proactiveCaptureTimer;
   bool _isProactiveCapturing = false;
 
+  bool get _hasReadyIosStillImage =>
+      _lastProactiveCapturedJpg != null && _lastProactiveCapturedFace != null;
+
   // كاشف الوجه للكشف والتحقق من صحة الوضع
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
@@ -259,7 +262,7 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   // =========================================================
   void _startProactiveCaptureLoop() {
     _proactiveCaptureTimer = Timer.periodic(
-        Duration(milliseconds: Platform.isIOS ? 1800 : 3000), (timer) async {
+        Duration(milliseconds: Platform.isIOS ? 900 : 3000), (timer) async {
       if (!mounted ||
           _isInitializing ||
           _isProcessing ||
@@ -332,6 +335,43 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
     }
 
     return false;
+  }
+
+  Future<bool> _prepareIosStillImageBeforeSave() async {
+    if (!Platform.isIOS) return true;
+    if (_hasReadyIosStillImage) return true;
+    if (_isProactiveCapturing) {
+      for (int i = 0; i < 10; i++) {
+        await Future.delayed(const Duration(milliseconds: 120));
+        if (_hasReadyIosStillImage) return true;
+      }
+    }
+
+    final previousStatus = _statusMessage;
+    if (mounted) {
+      setState(() {
+        _statusMessage =
+            'جاري تجهيز صورة الوجه على iPhone، ابق ثابتاً للحظة...';
+      });
+    }
+
+    final ready = await _ensureFreshIosProactiveCapture(attempts: 5);
+    if (!ready) {
+      await Future.delayed(const Duration(milliseconds: 250));
+      try {
+        await _runProactiveCaptureOnce();
+      } catch (_) {}
+    }
+
+    if (mounted && !_isProcessing && !_isSavingToServer) {
+      setState(() {
+        _statusMessage = _hasReadyIosStillImage
+            ? 'تم تجهيز صورة واضحة، جاري الحفظ...'
+            : previousStatus;
+      });
+    }
+
+    return _hasReadyIosStillImage;
   }
 
   Future<Uint8List> _prepareImageBytesForServerUpload(
@@ -801,6 +841,10 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
             _stabilizationTimer = Timer(const Duration(milliseconds: 1200), () {
               if (!mounted || _autoCaptureInProgress) return;
               if (_goodPoseFramesCount >= _requiredGoodFrames ~/ 2) {
+                if (Platform.isIOS && !_hasReadyIosStillImage) {
+                  unawaited(_prepareIosStillImageBeforeSave());
+                  return;
+                }
                 if (kDebugMode)
                   print(
                       '🎯 [Auto-Capture] تم استقرار الوضع → بدء التصوير التلقائي!');
@@ -891,6 +935,18 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   // =========================================================
   Future<void> _manualOrAutoCapture() async {
     if (_autoCaptureInProgress || _isProcessing || _isSavingToServer) return;
+    if (Platform.isIOS) {
+      final iosReady = await _prepareIosStillImageBeforeSave();
+      if (!iosReady) {
+        if (mounted) {
+          setState(() {
+            _statusMessage =
+                'لم تجهز صورة الحفظ على iPhone بعد. ابق ثابتاً داخل الإطار ثم أعد المحاولة بعد لحظة.';
+          });
+        }
+        return;
+      }
+    }
     _autoCaptureInProgress = true;
     _stabilizationTimer?.cancel();
     _stabilizationTimer = null;
@@ -934,11 +990,9 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       String fallbackUsed = 'NONE';
       try {
         if (Platform.isIOS) {
-          await _ensureFreshIosProactiveCapture();
+          await _ensureFreshIosProactiveCapture(attempts: 5);
         }
-        if (Platform.isIOS &&
-            _lastProactiveCapturedJpg != null &&
-            _lastProactiveCapturedFace != null) {
+        if (Platform.isIOS && _hasReadyIosStillImage) {
           finalImageBytes = _lastProactiveCapturedJpg!;
           finalFace = _lastProactiveCapturedFace!;
           fallbackUsed = 'IOS_PROACTIVE_JPG_PRIMARY';
@@ -993,8 +1047,7 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
         }
       } catch (capErr) {
         if (kDebugMode) print('💾 [$tid] ⚠️ المرحلة 1A فشلت: $capErr');
-        if (_lastProactiveCapturedJpg != null &&
-            _lastProactiveCapturedFace != null) {
+        if (_hasReadyIosStillImage) {
           finalImageBytes = _lastProactiveCapturedJpg!;
           finalFace = _lastProactiveCapturedFace!;
           fallbackUsed = 'PROACTIVE_JPG';
