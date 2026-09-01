@@ -38,7 +38,7 @@ class FaceEnrollmentScreen extends StatefulWidget {
 class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
     with WidgetsBindingObserver {
   static const bool _enableRemoteDebugTelemetry = true;
-  static const String _debugEnvPath = 'd:\\new\\.dbg\\face-detection-fail.env';
+  static const String _debugEnvPath = 'd:\\new\\.dbg\\ios-face-save-verify.env';
   String? _debugServerUrl;
   String? _debugSessionId;
   // #region debug-point A:reporting-helper
@@ -65,7 +65,7 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
         } catch (_) {}
       }
       final url = _debugServerUrl ?? 'http://192.168.1.163:7777/event';
-      final session = _debugSessionId ?? 'face-detection-fail';
+      final session = _debugSessionId ?? 'ios-face-save-verify';
       final client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 2);
       final req = await client.postUrl(Uri.parse(url));
@@ -106,6 +106,7 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   // التقاط استباقي لصورة JPG صالحة كل 3 ثوانٍ أثناء مرحلة انتظار الوجه
   Uint8List? _lastProactiveCapturedJpg;
   Face? _lastProactiveCapturedFace;
+  DateTime? _lastProactiveCapturedAt;
   Timer? _proactiveCaptureTimer;
   bool _isProactiveCapturing = false;
 
@@ -274,6 +275,13 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       }
       // نلتقط فقط عندما يكون هناك وجه في الإطار حالياً:
       if (!_isFaceCurrentlyDetected) return;
+      if (Platform.isIOS &&
+          _hasReadyIosStillImage &&
+          _lastProactiveCapturedAt != null &&
+          DateTime.now().difference(_lastProactiveCapturedAt!) <
+              const Duration(seconds: 2)) {
+        return;
+      }
       try {
         _isProactiveCapturing = true;
         await _runProactiveCaptureOnce();
@@ -306,6 +314,7 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       }
       _lastProactiveCapturedJpg = bytes;
       _lastProactiveCapturedFace = faces.first;
+      _lastProactiveCapturedAt = DateTime.now();
     }
   }
 
@@ -313,6 +322,13 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
     if (!Platform.isIOS) {
       return _lastProactiveCapturedJpg != null &&
           _lastProactiveCapturedFace != null;
+    }
+
+    if (_hasReadyIosStillImage &&
+        _lastProactiveCapturedAt != null &&
+        DateTime.now().difference(_lastProactiveCapturedAt!) <
+            const Duration(milliseconds: 1800)) {
+      return true;
     }
 
     for (int attempt = 1; attempt <= attempts; attempt++) {
@@ -951,10 +967,39 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   // 📸 الدالة الرئيسية: التقاط الصورة + حفظها في Users_Employees
   // =========================================================
   Future<void> _manualOrAutoCapture() async {
+    // #region debug-point B:capture-entry
+    unawaited(_reportDebugEvent(
+      'B',
+      'face_enrollment_screen_mobile.dart:_manualOrAutoCapture',
+      'Enrollment capture entry requested',
+      data: {
+        'platform': Platform.operatingSystem,
+        'autoCaptureInProgress': _autoCaptureInProgress,
+        'isProcessing': _isProcessing,
+        'isSavingToServer': _isSavingToServer,
+        'captureCompleted': _captureCompleted,
+        'hasReadyIosStillImage': _hasReadyIosStillImage,
+        'goodPoseFramesCount': _goodPoseFramesCount,
+      },
+    ));
+    // #endregion
     if (_autoCaptureInProgress || _isProcessing || _isSavingToServer) return;
     if (Platform.isIOS) {
       final iosReady = await _prepareIosStillImageBeforeSave();
       if (!iosReady) {
+        // #region debug-point B:ios-still-not-ready
+        unawaited(_reportDebugEvent(
+          'B',
+          'face_enrollment_screen_mobile.dart:_manualOrAutoCapture',
+          'Enrollment capture deferred because iPhone still image is not ready',
+          data: {
+            'hasReadyIosStillImage': _hasReadyIosStillImage,
+            'isProactiveCapturing': _isProactiveCapturing,
+            'lastProactiveFace': _lastProactiveCapturedFace != null,
+            'lastProactiveJpg': _lastProactiveCapturedJpg != null,
+          },
+        ));
+        // #endregion
         if (mounted) {
           setState(() {
             _statusMessage =
@@ -1135,6 +1180,23 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       Map<String, dynamic>? finalResult;
       String? lastApiErr;
 
+      // #region debug-point C:save-request
+      unawaited(_reportDebugEvent(
+        'C',
+        'face_enrollment_screen_mobile.dart:_captureAndSaveEmployeeFace',
+        'Enrollment is sending save request',
+        data: {
+          'employeeNumber': widget.employeeNumber,
+          'platform': Platform.operatingSystem,
+          'imageSource': fallbackUsed,
+          'captureBytesKb': finalImageBytes.length ~/ 1024,
+          'uploadBytesKb': uploadBytes.length ~/ 1024,
+          'base64Kb': base64Image.length ~/ 1024,
+          'hasReadyIosStillImage': _hasReadyIosStillImage,
+        },
+      ));
+      // #endregion
+
       for (saveAttempt = 1; saveAttempt <= maxAttempts; saveAttempt++) {
         try {
           if (kDebugMode)
@@ -1149,6 +1211,22 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
           ).timeout(const Duration(seconds: 15));
           final t4 = sw.elapsedMilliseconds;
           finalResult = r;
+          // #region debug-point C:save-response
+          unawaited(_reportDebugEvent(
+            'C',
+            'face_enrollment_screen_mobile.dart:_captureAndSaveEmployeeFace',
+            'Enrollment save request returned a response',
+            data: {
+              'attempt': saveAttempt,
+              'elapsedMs': t4,
+              'success': r['Success'] == true,
+              'message': r['Message'],
+              'statusCode': r['StatusCode'] ?? r['statusCode'],
+              'updatedExisting': r['UpdatedExisting'] == true || r['Updated'] == true,
+              'engineMode': r['EngineMode'],
+            },
+          ));
+          // #endregion
           if (_isSuccessResult(r)) {
             if (kDebugMode)
               print(
@@ -1222,6 +1300,20 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
           print('✅ [ENROLL-SAVE-SUCCESS-$tid] ═══════════════');
         }
         if (mounted) {
+          // #region debug-point D:save-final-success
+          unawaited(_reportDebugEvent(
+            'D',
+            'face_enrollment_screen_mobile.dart:_captureAndSaveEmployeeFace',
+            'Enrollment finalized as success on Flutter side',
+            data: {
+              'employeeNumber': widget.employeeNumber,
+              'updatedExisting': updatedExisting,
+              'message': finalResult!['Message'],
+              'captureCompleted': _captureCompleted,
+              'completedSuccessfully': _completedSuccessfully,
+            },
+          ));
+          // #endregion
           setState(() {
             _borderColor = Colors.green;
             _statusMessage = updatedExisting
@@ -1276,6 +1368,20 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
         }
         if (kDebugMode) print('❌❌❌ [ENROLL-SAVE-$tid] فشل نهائي. السبب: $msg');
         if (mounted) {
+          // #region debug-point D:save-final-failure
+          unawaited(_reportDebugEvent(
+            'D',
+            'face_enrollment_screen_mobile.dart:_captureAndSaveEmployeeFace',
+            'Enrollment finalized as failure on Flutter side',
+            data: {
+              'employeeNumber': widget.employeeNumber,
+              'message': msg,
+              'shouldAutoReset': shouldAutoReset,
+              'lastApiErr': lastApiErr,
+              'captureCompleted': _captureCompleted,
+            },
+          ));
+          // #endregion
           setState(() {
             _statusMessage = msg;
             _isProcessing = false;
@@ -1356,6 +1462,9 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
     if (!mounted) return;
     _stabilizationTimer?.cancel();
     _stabilizationTimer = null;
+    _lastProactiveCapturedJpg = null;
+    _lastProactiveCapturedFace = null;
+    _lastProactiveCapturedAt = null;
     setState(() {
       _isProcessing = false;
       _isSavingToServer = false;

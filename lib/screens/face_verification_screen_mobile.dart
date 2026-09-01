@@ -34,7 +34,7 @@ class FaceVerificationScreen extends StatefulWidget {
 class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     with WidgetsBindingObserver {
   static const bool _enableRemoteDebugTelemetry = true;
-  static const String _debugEnvPath = 'd:\\new\\.dbg\\face-detection-fail.env';
+  static const String _debugEnvPath = 'd:\\new\\.dbg\\ios-face-save-verify.env';
   String? _debugServerUrl;
   String? _debugSessionId;
   // #region debug-point A:reporting-helper
@@ -61,7 +61,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         } catch (_) {}
       }
       final url = _debugServerUrl ?? 'http://192.168.1.163:7777/event';
-      final session = _debugSessionId ?? 'face-detection-fail';
+      final session = _debugSessionId ?? 'ios-face-save-verify';
       final client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 2);
       final req = await client.postUrl(
@@ -111,6 +111,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   // ⚡ إصلاح 2: نظام Pre-Capture JPG (نفس الحل في التسجيل):
   Uint8List? _lastProactiveCapturedJpg;
   Face? _lastProactiveCapturedFace;
+  DateTime? _lastProactiveCapturedAt;
   Timer? _proactiveCaptureTimer;
   bool _isProactiveCapturing = false;
 
@@ -338,6 +339,14 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           _livenessStatus != LivenessStatus.challengeInProgress) {
         return;
       }
+      if (Platform.isIOS &&
+          _lastProactiveCapturedJpg != null &&
+          _lastProactiveCapturedFace != null &&
+          _lastProactiveCapturedAt != null &&
+          DateTime.now().difference(_lastProactiveCapturedAt!) <
+              const Duration(seconds: 2)) {
+        return;
+      }
       try {
         _isProactiveCapturing = true;
         await _runProactiveCaptureOnce();
@@ -366,9 +375,11 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       }
       _lastProactiveCapturedJpg = bytes;
       _lastProactiveCapturedFace = faces.first;
+      _lastProactiveCapturedAt = DateTime.now();
     } else {
       _lastProactiveCapturedJpg = null;
       _lastProactiveCapturedFace = null;
+      _lastProactiveCapturedAt = null;
     }
   }
 
@@ -376,6 +387,14 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     if (!Platform.isIOS) {
       return _lastProactiveCapturedJpg != null &&
           _lastProactiveCapturedFace != null;
+    }
+
+    if (_lastProactiveCapturedJpg != null &&
+        _lastProactiveCapturedFace != null &&
+        _lastProactiveCapturedAt != null &&
+        DateTime.now().difference(_lastProactiveCapturedAt!) <
+            const Duration(milliseconds: 1800)) {
+      return true;
     }
 
     for (int attempt = 1; attempt <= attempts; attempt++) {
@@ -753,6 +772,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           break;
         }
         _verificationStartRequested = true;
+        _lastProactiveCapturedAt = null;
         // #region debug-point A:passed-trigger
         unawaited(_reportDebugEvent(
           'A',
@@ -1857,6 +1877,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     setState(() {
       _isProcessing = false;
       _isVerifyingOnServer = false;
+      _lastProactiveCapturedJpg = null;
+      _lastProactiveCapturedFace = null;
+      _lastProactiveCapturedAt = null;
       _previousTrackedFace = null;
       _frameCounter = 0;
       _verificationCaptureCompleted =

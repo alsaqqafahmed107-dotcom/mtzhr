@@ -266,6 +266,16 @@ class FaceApiService {
         msg.toLowerCase().contains('not found');
   }
 
+  static Map<String, dynamic> _withEndpointMetadata(
+    Map<String, dynamic> result, {
+    required String endpointMode,
+    required bool usedLegacyFallback,
+  }) {
+    result['EndpointMode'] = endpointMode;
+    result['UsedLegacyFallback'] = usedLegacyFallback;
+    return result;
+  }
+
   /// 🆕 حفظ صورة الوجه في جدول Users_Employees (خلال التسجيل - لا فحص حياة)
   static Future<Map<String, dynamic>> saveEmployeeFaceImage({
     required int clientId,
@@ -298,14 +308,23 @@ class FaceApiService {
     // 🔄 🛡️ Fallback: إذا لم يكن الـ Endpoint الجديد منشور بعد → استخدم القديم
     if (_isNotFound404(newResult)) {
       _log('🔄 [FALLBACK] ❌ الـ Endpoint الجديد (save) غير موجود (404) — التبديل التلقائي إلى enrollFace القديم (biometric/face/enroll)...');
-      return enrollFace(
+      final fallbackResult = await enrollFace(
         clientId: clientId,
         employeeNumber: employeeNumber,
         imageBase64: imageBase64,
         deviceInfo: deviceInfo,
       );
+      return _withEndpointMetadata(
+        fallbackResult,
+        endpointMode: 'biometric-face-enroll-fallback',
+        usedLegacyFallback: true,
+      );
     }
-    return newResult;
+    return _withEndpointMetadata(
+      newResult,
+      endpointMode: 'employee-face-save',
+      usedLegacyFallback: false,
+    );
   }
 
   /// 🆕 جلب حالة صورة الوجه للموظف من جدول Users_Employees (هل الصورة موجودة؟)
@@ -325,9 +344,18 @@ class FaceApiService {
     // 🔄 🛡️ Fallback: إذا لم يكن الـ Endpoint الجديد منشور بعد
     if (_isNotFound404(newResult)) {
       _log('🔄 [FALLBACK] ❌ الـ Endpoint الجديد (status) غير موجود (404) — التبديل التلقائي إلى getFaceStatus القديم (biometric/face/status)...');
-      return getFaceStatus(clientId, employeeNumber);
+      final fallbackResult = await getFaceStatus(clientId, employeeNumber);
+      return _withEndpointMetadata(
+        fallbackResult,
+        endpointMode: 'biometric-face-status-fallback',
+        usedLegacyFallback: true,
+      );
     }
-    return newResult;
+    return _withEndpointMetadata(
+      newResult,
+      endpointMode: 'employee-face-status',
+      usedLegacyFallback: false,
+    );
   }
 
   /// 🆕 التحقق من الوجه أثناء الحضور/الانصراف (مع فحص الحياة + مطابقة ضد صورة المستخدم المخزنة)
@@ -368,14 +396,23 @@ class FaceApiService {
     // 🔄 🛡️ Fallback: إذا لم يكن الـ Endpoint الجديد منشور بعد
     if (_isNotFound404(newResult)) {
       _log('🔄 [FALLBACK] ❌ الـ Endpoint الجديد (verify) غير موجود (404) — التبديل التلقائي إلى verifyFace القديم (biometric/face/verify)...');
-      return verifyFace(
+      final fallbackResult = await verifyFace(
         clientId: clientId,
         employeeNumber: employeeNumber,
         imageBase64: imageBase64,
         deviceInfo: deviceInfo,
         timeout: timeout,
       );
+      return _withEndpointMetadata(
+        fallbackResult,
+        endpointMode: 'biometric-face-verify-fallback',
+        usedLegacyFallback: true,
+      );
     }
-    return newResult;
+    return _withEndpointMetadata(
+      newResult,
+      endpointMode: 'employee-face-verify',
+      usedLegacyFallback: false,
+    );
   }
 }
