@@ -18,6 +18,8 @@ import '../widgets/responsive_center.dart';
 import '../utils/platform_helper.dart';
 
 import '../services/api_service.dart';
+import '../services/face_api_service.dart';
+import 'face_verification_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -493,19 +495,87 @@ class _LoginScreenState extends State<LoginScreen>
       return true;
     }
 
-    // تسجيل الدخول لا يستخدم البصمة المحلية. تسجيل الوجه والتحقق منه
-    // يتم فقط داخل مسار الحضور والانصراف عبر الكاميرا والخادم.
+    final faceStatus = await FaceApiService.getEmployeeFaceImageStatus(
+      employee.clientID,
+      employee.employeeNumber,
+    );
+
+    final hasStoredFace = faceStatus['HasFaceTemplate'] == true ||
+        faceStatus['HasFaceImage'] == true ||
+        faceStatus['HasImage'] == true ||
+        faceStatus['IsRegistered'] == true;
+
     unawaited(_reportDebugEvent(
       'D',
       'login_screen.dart:_ensureFaceEnrollmentIfNeeded',
-      'Skipped local biometric gate because login now relies on password only',
+      'Checked stored face status after password login',
       data: {
         'employeeNumber': employee.employeeNumber,
         'clientId': employee.clientID,
         'lang': lang,
+        'statusSuccess': faceStatus['Success'] == true,
+        'hasStoredFace': hasStoredFace,
+        'endpointMode': faceStatus['EndpointMode'],
+        'usedLegacyFallback': faceStatus['UsedLegacyFallback'],
+        'message': faceStatus['Message'],
       },
     ));
-    return true;
+
+    if (faceStatus['Success'] != true || !hasStoredFace) {
+      return true;
+    }
+
+    if (!mounted) return false;
+
+    final verificationResult = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => FaceVerificationScreen(
+          employeeNumber: employee.employeeNumber,
+          clientId: employee.clientID,
+          showResetButton: false,
+        ),
+      ),
+    );
+
+    final verified = verificationResult is Map &&
+        (verificationResult['Success'] == true ||
+            verificationResult['Matched'] == true ||
+            verificationResult['Completed'] == true ||
+            verificationResult['Verified'] == true);
+
+    unawaited(_reportDebugEvent(
+      'D',
+      'login_screen.dart:_ensureFaceEnrollmentIfNeeded',
+      'Completed face verification gate after login',
+      data: {
+        'employeeNumber': employee.employeeNumber,
+        'clientId': employee.clientID,
+        'verified': verified,
+        'verificationResult': verificationResult?.toString(),
+      },
+    ));
+
+    if (verified) {
+      return true;
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            lang == 'ar'
+                ? 'فشل التحقق من بصمة الوجه، لذلك لن يتم إدخالك إلى التطبيق حالياً.'
+                : 'Face verification failed, so access to the app was not granted.',
+            style: const TextStyle(fontFamily: 'Tajawal'),
+          ),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+
+    return false;
   }
 
   @override
