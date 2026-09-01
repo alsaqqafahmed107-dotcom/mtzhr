@@ -324,6 +324,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   // ⚡ إصلاح 2: نظام التقاط الاستباقي (نفس منطق التسجيل)
   void _startProactiveCaptureLoop() {
+    if (Platform.isIOS) {
+      return;
+    }
     _proactiveCaptureTimer = Timer.periodic(
         Duration(milliseconds: Platform.isIOS ? 1800 : 3000), (timer) async {
       if (!mounted ||

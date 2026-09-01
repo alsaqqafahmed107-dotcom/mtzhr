@@ -262,6 +262,9 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   // 📸 نظام التقاط الاستباقي لصور JPG (Fallback)
   // =========================================================
   void _startProactiveCaptureLoop() {
+    if (Platform.isIOS) {
+      return;
+    }
     _proactiveCaptureTimer = Timer.periodic(
         Duration(milliseconds: Platform.isIOS ? 900 : 3000), (timer) async {
       if (!mounted ||
