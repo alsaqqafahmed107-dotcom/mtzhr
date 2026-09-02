@@ -115,6 +115,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   DateTime? _lastProactiveCapturedAt;
   Timer? _proactiveCaptureTimer;
   bool _isProactiveCapturing = false;
+  bool get _hasReadyIosStillImage =>
+      _lastProactiveCapturedJpg != null && _lastProactiveCapturedFace != null;
 
   final LivenessDetectionService _livenessService = LivenessDetectionService();
   LivenessStatus _livenessStatus = LivenessStatus.initializing;
@@ -333,11 +335,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   // ⚡ إصلاح 2: نظام التقاط الاستباقي (نفس منطق التسجيل)
   void _startProactiveCaptureLoop() {
-    if (Platform.isIOS) {
-      return;
-    }
     _proactiveCaptureTimer = Timer.periodic(
-        Duration(milliseconds: Platform.isIOS ? 1800 : 3000), (timer) async {
+        Duration(milliseconds: Platform.isIOS ? 900 : 3000), (timer) async {
       if (!mounted ||
           _isInitializing ||
           _isProcessing ||
@@ -388,6 +387,14 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       }
       _lastProactiveCapturedJpg = bytes;
       _lastProactiveCapturedFace = faces.first;
+      _lastProactiveCapturedAt = DateTime.now();
+    } else if (Platform.isIOS &&
+        (_currentDetectedFace != null || _lastValidFace != null)) {
+      // على iPhone قد تفشل قراءة الوجه من الصورة الثابتة بسبب EXIF/الاتجاه
+      // رغم أن البث المباشر أكد وجود وجه صالح قبل أجزاء من الثانية.
+      final fallbackFace = _currentDetectedFace ?? _lastValidFace!;
+      _lastProactiveCapturedJpg = bytes;
+      _lastProactiveCapturedFace = fallbackFace;
       _lastProactiveCapturedAt = DateTime.now();
     } else {
       _lastProactiveCapturedJpg = null;
@@ -469,6 +476,43 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     ));
     // #endregion
     return false;
+  }
+
+  Future<bool> _prepareIosStillImageBeforeVerify() async {
+    if (!Platform.isIOS) return true;
+    if (_hasReadyIosStillImage) return true;
+    if (_isProactiveCapturing) {
+      for (int i = 0; i < 10; i++) {
+        await Future.delayed(const Duration(milliseconds: 120));
+        if (_hasReadyIosStillImage) return true;
+      }
+    }
+
+    final previousStatus = _statusMessage;
+    if (mounted) {
+      setState(() {
+        _statusMessage =
+            'جاري تجهيز صورة التحقق على iPhone، ابق ثابتاً داخل الإطار للحظة...';
+      });
+    }
+
+    final ready = await _ensureFreshIosProactiveCapture(attempts: 5);
+    if (!ready) {
+      await Future.delayed(const Duration(milliseconds: 250));
+      try {
+        await _runProactiveCaptureOnce();
+      } catch (_) {}
+    }
+
+    if (mounted && !_isProcessing && !_isVerifyingOnServer) {
+      setState(() {
+        _statusMessage = _hasReadyIosStillImage
+            ? 'تم تجهيز صورة التحقق، جاري المتابعة...'
+            : previousStatus;
+      });
+    }
+
+    return _hasReadyIosStillImage;
   }
 
   Future<Uint8List> _prepareImageBytesForServerUpload(
@@ -1373,6 +1417,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       String fallbackUsed = 'NONE';
       try {
         if (Platform.isIOS) {
+          await _prepareIosStillImageBeforeVerify();
           await _ensureFreshIosProactiveCapture();
         }
         if (Platform.isIOS &&
@@ -1454,6 +1499,15 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
             throw StateError(_lang() == 'ar'
                 ? 'تم اكتشاف أكثر من وجه في الصورة. يرجى أن يظهر وجه موظف واحد فقط.'
                 : 'More than one face detected in the captured image.');
+          } else if (Platform.isIOS &&
+              (_currentDetectedFace != null || _lastValidFace != null)) {
+            finalImageBytes = bytesXFile;
+            finalFace = _currentDetectedFace ?? _lastValidFace!;
+            fallbackUsed = 'IOS_LIVE_FACE_FALLBACK';
+            if (kDebugMode) {
+              print(
+                  '⚡ [VERIFY-PERF] (${t2c}ms) PHASE 2A OK: iPhone fallback → استخدام وجه البث المباشر مع الصورة الثابتة ✅');
+            }
           } else {
             failReason = 'NO_FACE_IN_CAPTURED';
             throw StateError(_lang() == 'ar'
