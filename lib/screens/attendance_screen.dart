@@ -101,6 +101,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   bool _isInitializing = true;
   bool _usedFaceVerification = false;
   Map<String, dynamic>? _faceVerificationProof;
+  bool _isFailureDialogVisible = false;
   static const Duration _maxFaceVerificationAge = Duration(minutes: 2);
   static const Duration _maxFaceVerificationFutureSkew =
       Duration(minutes: 10);
@@ -1230,6 +1231,11 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         faceVerificationPassed: _usedFaceVerification,
         faceVerificationAtUtc:
             _faceVerificationProof?['verificationAtUtc']?.toString(),
+        faceVerificationCapturedAtMs:
+            int.tryParse(
+              _faceVerificationProof?['verificationCapturedAtMs']?.toString() ??
+                  '',
+            ),
         faceVerificationEmployeeNumber:
             _faceVerificationProof?['employeeNumber']?.toString(),
         faceVerificationConfidence:
@@ -1330,6 +1336,32 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       _resultDetails = details;
     });
     _errorController.forward();
+    unawaited(_showFailureDialog(message, details));
+  }
+
+  Future<void> _showFailureDialog(String title, String details) async {
+    if (!mounted || _isFailureDialogVisible) return;
+    _isFailureDialogVisible = true;
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: Text(title),
+            content: Text(details),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('موافق'),
+              ),
+            ],
+          );
+        },
+      );
+    } finally {
+      _isFailureDialogVisible = false;
+    }
   }
 
   // ⚡ إصلاح: توسيع منطق إعادة المحاولة ليكون أكثر ذكاءً وشمولاً

@@ -84,6 +84,7 @@ class AttendanceModel {
   final String? authenticationMethod; // "GPS", "FINGERPRINT", "FACE"
   final bool? faceVerificationPassed;
   final String? faceVerificationAtUtc;
+  final int? faceVerificationCapturedAtMs;
   final String? faceVerificationEmployeeNumber;
   final double? faceVerificationConfidence;
   final double? faceLivenessScore;
@@ -121,6 +122,7 @@ class AttendanceModel {
     this.authenticationMethod,
     this.faceVerificationPassed,
     this.faceVerificationAtUtc,
+    this.faceVerificationCapturedAtMs,
     this.faceVerificationEmployeeNumber,
     this.faceVerificationConfidence,
     this.faceLivenessScore,
@@ -158,6 +160,8 @@ class AttendanceModel {
       authenticationMethod: json['AuthenticationMethod'],
       faceVerificationPassed: json['FaceVerificationPassed'],
       faceVerificationAtUtc: json['FaceVerificationAtUtc'],
+      faceVerificationCapturedAtMs:
+          json['FaceVerificationCapturedAtMs']?.toInt(),
       faceVerificationEmployeeNumber: json['FaceVerificationEmployeeNumber'],
       faceVerificationConfidence: json['FaceVerificationConfidence']?.toDouble(),
       faceLivenessScore: json['FaceLivenessScore']?.toDouble(),
@@ -197,6 +201,7 @@ class AttendanceModel {
       'AuthenticationMethod': authenticationMethod,
       'FaceVerificationPassed': faceVerificationPassed,
       'FaceVerificationAtUtc': faceVerificationAtUtc,
+      'FaceVerificationCapturedAtMs': faceVerificationCapturedAtMs,
       'FaceVerificationEmployeeNumber': faceVerificationEmployeeNumber,
       'FaceVerificationConfidence': faceVerificationConfidence,
       'FaceLivenessScore': faceLivenessScore,
