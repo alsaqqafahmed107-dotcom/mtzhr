@@ -33,7 +33,7 @@ class FaceVerificationScreen extends StatefulWidget {
 
 class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     with WidgetsBindingObserver {
-  static const bool _enableRemoteDebugTelemetry = true;
+  static const bool _enableRemoteDebugTelemetry = false;
   static const String _debugEnvPath = 'd:\\new\\.dbg\\ios-face-save-verify.env';
   String? _debugServerUrl;
   String? _debugSessionId;
@@ -177,8 +177,16 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _proactiveCaptureTimer?.cancel();
-    _controller?.stopImageStream();
-    _controller?.dispose();
+    final controller = _controller;
+    _controller = null;
+    if (controller != null) {
+      try {
+        if (controller.value.isStreamingImages) {
+          unawaited(controller.stopImageStream().catchError((_) {}));
+        }
+      } catch (_) {}
+    }
+    unawaited(controller?.dispose());
     _faceDetector.close();
     _livenessService.dispose();
     super.dispose();
@@ -362,7 +370,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   }
 
   Future<void> _runProactiveCaptureOnce() async {
-    if (_controller == null || !_controller!.value.isInitialized) return;
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
     final XFile? img = await _tryTakePictureOrNull(timeoutMs: 2200);
     if (img == null) return;
     final bytes = await File(img.path)
@@ -578,6 +587,28 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     }
 
     return '$normalizedMessage\n\nTechnical details:\n$normalizedDetails';
+  }
+
+  String _friendlyCameraErrorMessage(Object error) {
+    final raw = error.toString().trim();
+    final lower = raw.toLowerCase();
+
+    if (lower.contains('null check operator used on a null value')) {
+      return _lang() == 'ar'
+          ? 'تعذر إكمال تهيئة الكاميرا لأن مرجع الكاميرا أصبح غير جاهز أثناء التشغيل. تم الآن تحسين الحماية داخل الشاشة، وأي فقد مؤقت للكاميرا لن يؤدي إلى انهيار العملية.'
+          : 'Camera initialization could not complete because the camera reference became unavailable during execution. The screen now handles temporary camera loss safely.';
+    }
+
+    if (lower.contains('camera') && lower.contains('disposed')) {
+      return _lang() == 'ar'
+          ? 'تم إغلاق الكاميرا أثناء التحقق. يرجى إعادة المحاولة.'
+          : 'The camera was closed during verification. Please try again.';
+    }
+
+    return _tParams(
+      'camera_start_error_with_error',
+      {'error': raw},
+    );
   }
 
   void _showFailureDialog({
@@ -972,23 +1003,19 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       ));
       // #endregion
       if (mounted) {
+        final friendlyMessage = _friendlyCameraErrorMessage(e);
         setState(() {
           _isInitializing = false;
-          _statusMessage = _tParams(
-            'camera_start_error_with_error',
-            {'error': e.toString()},
-          );
+          _statusMessage = friendlyMessage;
           _instructionMessage = _lang() == 'ar'
               ? 'تم إيقاف المتابعة حتى تتمكن من قراءة سبب المشكلة.'
               : 'The flow has been paused so you can read the error message.';
         });
+        _borderColor = Colors.red;
       }
       _showFailureDialog(
         title: _lang() == 'ar' ? 'خطأ في تشغيل الكاميرا' : 'Camera Error',
-        message: _tParams(
-          'camera_start_error_with_error',
-          {'error': e.toString()},
-        ),
+        message: _friendlyCameraErrorMessage(e),
         rawDetails: e.toString(),
       );
     }
@@ -1800,11 +1827,12 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   }) async {
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
       if (!mounted) return;
+      final controller = _controller;
       final String reason1 =
           _isVerifyingOnServer ? "_isVerifyingOnServer=true" : "✓";
-      final String reason2 = _controller == null ? "controller=NULL" : "✓";
+      final String reason2 = controller == null ? "controller=NULL" : "✓";
       final String reason3 =
-          (_controller != null && !_controller!.value.isInitialized)
+          (controller != null && !controller.value.isInitialized)
               ? "controller not init"
               : "✓";
       final String reasonsFailed =
@@ -1831,8 +1859,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
       // 🚨 تم إزالة _isProcessing من الشروط (تناقض قاتل مع Status.passed!)
       if (!_isVerifyingOnServer &&
-          _controller != null &&
-          _controller!.value.isInitialized) {
+          controller != null &&
+          controller.value.isInitialized) {
         if (kDebugMode)
           print(
               '🔄 [VERIFY-START-$attempt] ✅ جميع الشروط مستوفاة → بدء التحقق فوراً');
