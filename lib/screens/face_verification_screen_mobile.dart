@@ -96,6 +96,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   bool _faceMatched = false;
   bool _completedSuccessfully = false;
   bool _closeHandled = false;
+  bool _isFailureDialogVisible = false;
   Map<String, dynamic>? _successfulVerificationPayload;
   bool _verificationStartRequested = false;
   bool _streamPausedForStillCapture = false;
@@ -563,6 +564,57 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   String _tParams(String key, Map<String, String> params) =>
       Translations.getTextWithParams(key, _lang(), params);
 
+  String _formatDialogMessage(String message, {String? rawDetails}) {
+    final normalizedMessage = message.trim();
+    final normalizedDetails = rawDetails?.trim();
+    if (normalizedDetails == null ||
+        normalizedDetails.isEmpty ||
+        normalizedDetails == normalizedMessage) {
+      return normalizedMessage;
+    }
+
+    if (_lang() == 'ar') {
+      return '$normalizedMessage\n\nالتفاصيل الفنية:\n$normalizedDetails';
+    }
+
+    return '$normalizedMessage\n\nTechnical details:\n$normalizedDetails';
+  }
+
+  void _showFailureDialog({
+    required String title,
+    required String message,
+    String? rawDetails,
+  }) {
+    if (!mounted || _isFailureDialogVisible) return;
+    _isFailureDialogVisible = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        _isFailureDialogVisible = false;
+        return;
+      }
+
+      showDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(title),
+          content: SingleChildScrollView(
+            child: Text(_formatDialogMessage(message, rawDetails: rawDetails)),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text(_t('ok')),
+            ),
+          ],
+        ),
+      ).whenComplete(() {
+        _isFailureDialogVisible = false;
+      });
+    });
+  }
+
   List<int> _extractFaceTextureSamples(CameraImage image, Face? face) {
     if (image.planes.isEmpty) return const <int>[];
 
@@ -926,8 +978,19 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
             'camera_start_error_with_error',
             {'error': e.toString()},
           );
+          _instructionMessage = _lang() == 'ar'
+              ? 'تم إيقاف المتابعة حتى تتمكن من قراءة سبب المشكلة.'
+              : 'The flow has been paused so you can read the error message.';
         });
       }
+      _showFailureDialog(
+        title: _lang() == 'ar' ? 'خطأ في تشغيل الكاميرا' : 'Camera Error',
+        message: _tParams(
+          'camera_start_error_with_error',
+          {'error': e.toString()},
+        ),
+        rawDetails: e.toString(),
+      );
     }
   }
 
@@ -1692,7 +1755,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
               '❌ [VERIFY-PERF] فشل نهائي بعد $maxAttempts محاولات. السبب الأخير: $msg');
           print('❌ [VERIFY-PERF] آخر مرحلة ناجحة قبل الفشل: $phase');
         }
-        _handleFailure(msg);
+        _handleFailure(
+          msg,
+          rawDetails: finalResult?['Message']?.toString(),
+        );
       }
     } catch (e, stack) {
       if (kDebugMode) {
@@ -1709,12 +1775,18 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           _lang() == 'ar'
               ? 'استغرق الخادم وقتاً أطول من المتوقع أثناء التحقق من الوجه. تأكد أن خدمة التعرف على الوجه وواجهة الـ API تعملان ثم أعد المحاولة.'
               : 'The server took too long while verifying the face. Make sure the face engine and API are running, then try again.',
+          rawDetails: e.toString(),
         );
       } else if (e is StateError) {
-        _handleFailure(e.message);
+        _handleFailure(e.message, rawDetails: e.toString());
       } else {
-        _handleFailure(_tParams('connection_error_with_error',
-            {'error': e.toString().split('\n').first}));
+        _handleFailure(
+          _tParams(
+            'connection_error_with_error',
+            {'error': e.toString().split('\n').first},
+          ),
+          rawDetails: e.toString(),
+        );
       }
     }
   }
@@ -1831,7 +1903,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     });
   }
 
-  void _handleFailure(String message) {
+  void _handleFailure(String message, {String? rawDetails}) {
     if (!mounted) return;
     // #region debug-point D:handle-failure
     unawaited(_reportDebugEvent(
@@ -1855,11 +1927,11 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       _isVerifyingOnServer = false;
     });
     _verificationStartRequested = false;
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted && !_faceMatched) {
-        _resetAndStartOver();
-      }
-    });
+    _showFailureDialog(
+      title: _lang() == 'ar' ? 'فشل التحقق من الوجه' : 'Face Verification Failed',
+      message: message,
+      rawDetails: rawDetails,
+    );
   }
 
   void _resetAndStartOver() {
@@ -1974,7 +2046,31 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
               child: ClipRect(
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    final controller = _controller!;
+                    final controller = _controller;
+                    if (controller == null || !controller.value.isInitialized) {
+                      return Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          const ColoredBox(color: Colors.black),
+                          IgnorePointer(
+                            child: CustomPaint(
+                              painter: _FaceGuidePainter(
+                                faceDetected: false,
+                                readiness: 0,
+                                color: _borderColor,
+                              ),
+                            ),
+                          ),
+                          Center(
+                            child: CircularProgressIndicator(
+                              color: _borderColor == Colors.red
+                                  ? Colors.orange
+                                  : _borderColor,
+                            ),
+                          ),
+                        ],
+                      );
+                    }
                     final screenAspect =
                         constraints.maxWidth / constraints.maxHeight;
                     final cameraAspect = previewSize == null

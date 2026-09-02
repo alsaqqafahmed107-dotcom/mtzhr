@@ -388,11 +388,6 @@ class _LoginScreenState extends State<LoginScreen>
                   .catchError(
                       (_) => <String, dynamic>{'Success': false, 'Data': []});
               final probeData = probe['Data'] as List<dynamic>?;
-              final serverAccess = probe['HasApprovalAccess'] == true ||
-                  (probe['HasApprovalAccess'] is String &&
-                      probe['HasApprovalAccess'].toString().toLowerCase() ==
-                          'true') ||
-                  (probeData != null && probeData.isNotEmpty);
               final finalPerm =
                   ApprovalPermissionService.evaluateApproverFromSignals(
                 clientId: emp.clientID,

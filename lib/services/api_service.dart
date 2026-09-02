@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -240,6 +241,16 @@ class ApiService {
           );
         }
       }
+    } on SocketException catch (e) {
+      _log('💥 خطأ شبكة (SocketException): $e');
+      return api_models.EmployeeLoginResponse(
+        success: false,
+        message:
+            'تعذر الوصول إلى الخادم من الجهاز.\n'
+            'تأكد من أن الهاتف على نفس الشبكة مع الخادم وأن العنوان صحيح:\n'
+            '${ApiConfig.loginUrl}',
+        employee: null,
+      );
     } on http.ClientException catch (e) {
       _log('💥 خطأ في العميل (ClientException): $e');
       final msg = e.toString();
@@ -247,6 +258,10 @@ class ApiService {
           (msg.contains('Failed to fetch') ||
               msg.contains('TypeError') ||
               msg.contains('All URIs failed'));
+      final isAndroidHttpPolicyIssue = !kIsWeb &&
+          (msg.contains('CLEARTEXT') ||
+              msg.contains('Cleartext') ||
+              msg.contains('not permitted'));
       return api_models.EmployeeLoginResponse(
         success: false,
         message: isLikelyCors
@@ -255,7 +270,11 @@ class ApiService {
                 '1) فعّل CORS على خادم الـ API للسماح لمصدر الويب.\n'
                 '2) أو شغّل الويب في وضع تطوير يتجاوز CORS.\n'
                 'الرابط الحالي: ${ApiConfig.baseUrl}'
-            : 'خطأ في الاتصال بالخادم',
+            : isAndroidHttpPolicyIssue
+                ? 'أندرويد منع الاتصال عبر HTTP غير المشفر.\n'
+                    'تم ضبط التطبيق للسماح بالاتصال بالخادم المحلي، أعد بناء التطبيق ثم جرّب مرة أخرى.\n'
+                    'الرابط الحالي: ${ApiConfig.loginUrl}'
+                : 'خطأ في الاتصال بالخادم',
         employee: null,
       );
     } on TimeoutException catch (e) {

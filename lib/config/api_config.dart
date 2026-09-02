@@ -1,9 +1,18 @@
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
 import 'api_discovery.dart';
 
 class ApiConfig {
+  static const String _prefsBaseUrlKey = 'api_base_url';
+  static const String _defaultBaseUrl = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'http://192.168.1.163:333/',
+  );
+
   // الرابط الأساسي للـ API - متغير
-  static String _baseUrl = 'http://192.168.1.163:333/';
+  static String _baseUrl = _defaultBaseUrl;
   // static String _baseUrl = 'http://192.168.1.163:333/';
   // static String _baseUrl =
   // 'http://192.168.1.163:333/'; // تم التغيير من localhost لدعم الهاتف الحقيقي
@@ -86,22 +95,28 @@ class ApiConfig {
     if (_isInitialized) return;
 
     try {
-      print('🔍 جاري اكتشاف الرابط المحول...');
+      debugPrint('🔍 جاري اكتشاف الرابط المحول...');
+
+      final prefs = await SharedPreferences.getInstance();
+      final savedBaseUrl = prefs.getString(_prefsBaseUrlKey);
+      if (savedBaseUrl != null && savedBaseUrl.trim().isNotEmpty) {
+        _baseUrl = savedBaseUrl.trim();
+      }
 
       _baseUrl = _normalizeBaseUrl(_baseUrl);
       final discovered = await discoverBaseUrl(_baseUrl);
       if (discovered != null && discovered.isNotEmpty) {
         _baseUrl = _normalizeBaseUrl(discovered);
-        print('✅ تم اكتشاف رابط محول: $_baseUrl');
+        debugPrint('✅ تم اكتشاف رابط محول: $_baseUrl');
       } else {
-        print('✅ تم استخدام الرابط الافتراضي: $_baseUrl');
+        debugPrint('✅ تم استخدام الرابط الافتراضي: $_baseUrl');
       }
 
       _isInitialized = true;
     } catch (e) {
-      print(
+      debugPrint(
           '⚠️ فشل اكتشاف الرابط التلقائي، سيتم استخدام الرابط الافتراضي: $_baseUrl');
-      print('Error: $e');
+      debugPrint('Error: $e');
       _isInitialized = true;
     }
   }
@@ -110,6 +125,52 @@ class ApiConfig {
   static Future<void> reinitialize() async {
     _isInitialized = false;
     await initialize();
+  }
+
+  static bool get isUsingCustomBaseUrl =>
+      _normalizeBaseUrl(_baseUrl) != _normalizeBaseUrl(_defaultBaseUrl);
+
+  static Future<void> setBaseUrl(String url, {bool persist = true}) async {
+    _baseUrl = _normalizeBaseUrl(url);
+    _isInitialized = true;
+
+    if (!persist) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefsBaseUrlKey, _baseUrl);
+  }
+
+  static Future<void> resetBaseUrl() async {
+    _baseUrl = _normalizeBaseUrl(_defaultBaseUrl);
+    _isInitialized = true;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefsBaseUrlKey);
+  }
+
+  static Future<bool> verifyBaseUrl(String candidateUrl) async {
+    final normalizedBase = _normalizeBaseUrl(candidateUrl);
+    final loginUrl = _join(normalizedBase, loginEndpoint);
+
+    try {
+      final response = await http
+          .post(
+            Uri.parse(loginUrl),
+            headers: headers,
+            body: jsonEncode({
+              'email': '',
+              'password': '',
+              'macAddress': 'connectivity-check',
+              'deviceName': 'connectivity-check',
+              'deviceType': 'connectivity-check',
+            }),
+          )
+          .timeout(const Duration(seconds: 8));
+
+      return response.statusCode != 404;
+    } catch (_) {
+      return false;
+    }
   }
 
   // أو استخدم عنوان IP المحلي إذا كان الخادم يعمل على نفس الشبكة

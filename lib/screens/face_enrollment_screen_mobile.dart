@@ -98,6 +98,7 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   double _progressValue =
       0.0; // النسبة المئوية لاستقرار وضع الوجه قبل التصوير التلقائي
   bool _completedSuccessfully = false;
+  bool _isFailureDialogVisible = false;
 
   // ⚡ تتبع وقت بدء الجلسة لحساب المدة بشكل صحيح
   final DateTime _sessionStartTime = DateTime.now();
@@ -498,6 +499,57 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   String _tParams(String key, Map<String, String> params) =>
       Translations.getTextWithParams(key, _lang(), params);
 
+  String _formatDialogMessage(String message, {String? rawDetails}) {
+    final normalizedMessage = message.trim();
+    final normalizedDetails = rawDetails?.trim();
+    if (normalizedDetails == null ||
+        normalizedDetails.isEmpty ||
+        normalizedDetails == normalizedMessage) {
+      return normalizedMessage;
+    }
+
+    if (_lang() == 'ar') {
+      return '$normalizedMessage\n\nالتفاصيل الفنية:\n$normalizedDetails';
+    }
+
+    return '$normalizedMessage\n\nTechnical details:\n$normalizedDetails';
+  }
+
+  void _showFailureDialog({
+    required String title,
+    required String message,
+    String? rawDetails,
+  }) {
+    if (!mounted || _isFailureDialogVisible) return;
+    _isFailureDialogVisible = true;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        _isFailureDialogVisible = false;
+        return;
+      }
+
+      showDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(title),
+          content: SingleChildScrollView(
+            child: Text(_formatDialogMessage(message, rawDetails: rawDetails)),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text(_t('ok')),
+            ),
+          ],
+        ),
+      ).whenComplete(() {
+        _isFailureDialogVisible = false;
+      });
+    });
+  }
+
   bool _isSuccessResult(dynamic result) {
     if (result is! Map) return false;
     if (result['Success'] == true) return true;
@@ -600,8 +652,19 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
           _statusMessage = _tParams(
               'camera_start_error_with_error', {'error': e.toString()});
           _borderColor = Colors.red;
+          _poseHintMessage = _lang() == 'ar'
+              ? 'تم إيقاف المتابعة حتى تتمكن من قراءة سبب المشكلة.'
+              : 'The flow has been paused so you can read the error message.';
         });
       }
+      _showFailureDialog(
+        title: _lang() == 'ar' ? 'خطأ في تشغيل الكاميرا' : 'Camera Error',
+        message: _tParams(
+          'camera_start_error_with_error',
+          {'error': e.toString()},
+        ),
+        rawDetails: e.toString(),
+      );
     }
   }
 
@@ -1389,16 +1452,18 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
             _statusMessage = msg;
             _isProcessing = false;
             _isSavingToServer = false;
-            _poseHintMessage = shouldAutoReset
-                ? ''
-                : 'يمكنك قراءة الرسالة ثم الضغط على "إعادة المحاولة".';
+            _poseHintMessage = _lang() == 'ar'
+                ? 'يمكنك قراءة الرسالة ثم الضغط على "إعادة المحاولة".'
+                : 'Read the message, then tap Retry.';
             _borderColor = Colors.red;
           });
-          if (shouldAutoReset) {
-            Future.delayed(const Duration(seconds: 6), () {
-              if (mounted) _resetAndStartOver();
-            });
-          }
+          _showFailureDialog(
+            title: _lang() == 'ar'
+                ? 'فشل حفظ بصمة الوجه'
+                : 'Face Save Failed',
+            message: msg,
+            rawDetails: lastApiErr,
+          );
         }
       }
     } catch (e, stack) {
@@ -1443,15 +1508,17 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
           _statusMessage = friendlyMsg;
           _isProcessing = false;
           _isSavingToServer = false;
-          _poseHintMessage =
-              shouldAutoReset ? '' : 'بعد قراءة الرسالة اضغط "إعادة المحاولة".';
+          _poseHintMessage = _lang() == 'ar'
+              ? 'بعد قراءة الرسالة اضغط "إعادة المحاولة".'
+              : 'After reading the message, tap Retry.';
           _borderColor = Colors.red;
         });
-        if (shouldAutoReset) {
-          Future.delayed(const Duration(seconds: 6), () {
-            if (mounted) _resetAndStartOver();
-          });
-        }
+        _showFailureDialog(
+          title:
+              _lang() == 'ar' ? 'فشل حفظ بصمة الوجه' : 'Face Save Failed',
+          message: friendlyMsg,
+          rawDetails: rawErr,
+        );
       }
     } finally {
       await _resumeImageStreamIfNeeded();
