@@ -1760,9 +1760,11 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         );
         _completedSuccessfully = true;
         _faceMatched = true;
+        final verificationNow = DateTime.now();
         _successfulVerificationPayload = {
           'Verified': true,
-          'VerificationAtUtc': DateTime.now().toUtc().toIso8601String(),
+          'VerificationAtUtc': verificationNow.toUtc().toIso8601String(),
+          'VerificationCapturedAtMs': verificationNow.millisecondsSinceEpoch,
           'ConfidenceScore':
               (finalResult!['ConfidenceScore'] as num?)?.toDouble(),
           'LivenessScore': (finalResult!['LivenessScore'] as num?)?.toDouble(),

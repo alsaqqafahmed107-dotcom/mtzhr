@@ -102,6 +102,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   bool _usedFaceVerification = false;
   Map<String, dynamic>? _faceVerificationProof;
   static const Duration _maxFaceVerificationAge = Duration(minutes: 2);
+  static const Duration _maxFaceVerificationFutureSkew =
+      Duration(minutes: 10);
   String _currentStep = '';
   Position? _currentPosition;
   Timer? _locationTimer;
@@ -433,6 +435,33 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       };
     }
 
+    final verificationCapturedAtMs =
+        int.tryParse(proof['verificationCapturedAtMs']?.toString() ?? '');
+    if (verificationCapturedAtMs != null) {
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      final ageMs = nowMs - verificationCapturedAtMs;
+      if (ageMs < -_maxFaceVerificationFutureSkew.inMilliseconds) {
+        return {
+          'title': 'وقت التحقق غير متزامن',
+          'details':
+              'يوجد فرق كبير وغير متوقع في وقت التحقق من الوجه. تحقق من وقت الجهاز ثم أعد المحاولة.',
+        };
+      }
+
+      final normalizedAge = Duration(
+        milliseconds: ageMs < 0 ? 0 : ageMs,
+      );
+      if (normalizedAge > _maxFaceVerificationAge) {
+        return {
+          'title': 'انتهت صلاحية التحقق من الوجه',
+          'details':
+              'مر وقت طويل منذ آخر تحقق ناجح للوجه. أعد التحقق من الوجه مباشرة ثم حاول تسجيل الحضور.',
+        };
+      }
+
+      return null;
+    }
+
     final verificationAtRaw = proof['verificationAtUtc']?.toString();
     if (verificationAtRaw == null || verificationAtRaw.isEmpty) {
       return {
@@ -453,11 +482,11 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
     final nowUtc = DateTime.now().toUtc();
     final age = nowUtc.difference(verificationAt);
-    if (age.inSeconds < -60) {
+    if (age < -_maxFaceVerificationFutureSkew) {
       return {
         'title': 'وقت التحقق غير متزامن',
         'details':
-            'يوجد فرق غير متوقع في توقيت التحقق من الوجه. تحقق من وقت الجهاز ثم أعد المحاولة.',
+            'يوجد فرق كبير وغير متوقع في توقيت التحقق من الوجه. تحقق من وقت الجهاز ثم أعد المحاولة.',
       };
     }
 
@@ -899,6 +928,13 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               'verificationAtUtc':
                   navigationResult['VerificationAtUtc']?.toString() ??
                       DateTime.now().toUtc().toIso8601String(),
+              'verificationCapturedAtMs':
+                  int.tryParse(
+                        navigationResult['VerificationCapturedAtMs']
+                                ?.toString() ??
+                            '',
+                      ) ??
+                      DateTime.now().millisecondsSinceEpoch,
               'confidenceScore':
                   (navigationResult['ConfidenceScore'] as num?)?.toDouble(),
               'livenessScore':
@@ -911,6 +947,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               'passed': true,
               'employeeNumber': widget.employeeNumber,
               'verificationAtUtc': DateTime.now().toUtc().toIso8601String(),
+              'verificationCapturedAtMs': DateTime.now().millisecondsSinceEpoch,
               'source': 'face-session-fallback',
             };
           }
@@ -950,6 +987,10 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                       ?.toUtc()
                       .toIso8601String() ??
                   DateTime.now().toUtc().toIso8601String(),
+              'verificationCapturedAtMs':
+                  FaceApiService.debugLastSessionTimestamp
+                          ?.millisecondsSinceEpoch ??
+                      DateTime.now().millisecondsSinceEpoch,
               'source': 'face-session-verification-fallback',
             };
             FaceApiService.clearLastFaceSession();
@@ -989,6 +1030,10 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                       ?.toUtc()
                       .toIso8601String() ??
                   DateTime.now().toUtc().toIso8601String(),
+              'verificationCapturedAtMs':
+                  FaceApiService.debugLastSessionTimestamp
+                          ?.millisecondsSinceEpoch ??
+                      DateTime.now().millisecondsSinceEpoch,
               'source': 'face-session-verification-fallback-delayed',
             };
             FaceApiService.clearLastFaceSession();
