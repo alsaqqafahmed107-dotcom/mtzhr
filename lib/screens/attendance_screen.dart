@@ -547,6 +547,11 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
+        await _showLocationAccessDialog(
+          title: Translations.getText('location_service_disabled', lang),
+          details: Translations.getText('enable_location_service', lang),
+          openDeviceLocationSettings: true,
+        );
         _showError(Translations.getText('location_service_disabled', lang),
             Translations.getText('enable_location_service', lang));
         return;
@@ -556,6 +561,10 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
+          await _showLocationAccessDialog(
+            title: Translations.getText('location_permission_denied', lang),
+            details: Translations.getText('allow_location_access', lang),
+          );
           _showError(Translations.getText('location_permission_denied', lang),
               Translations.getText('allow_location_access', lang));
           return;
@@ -563,6 +572,12 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       }
 
       if (permission == LocationPermission.deniedForever) {
+        await _showLocationAccessDialog(
+          title:
+              Translations.getText('location_permission_denied_forever', lang),
+          details: Translations.getText('enable_location_permissions', lang),
+          openAppSettingsDirectly: true,
+        );
         _showError(
             Translations.getText('location_permission_denied_forever', lang),
             Translations.getText('enable_location_permissions', lang));
@@ -575,6 +590,54 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       _showError(Translations.getText('location_permission_error', lang),
           e.toString());
     }
+  }
+
+  Future<void> _showLocationAccessDialog({
+    required String title,
+    required String details,
+    bool openAppSettingsDirectly = false,
+    bool openDeviceLocationSettings = false,
+  }) async {
+    if (!mounted) return;
+    final lang = Provider.of<LanguageService>(context, listen: false)
+        .currentLocale
+        .languageCode;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(title),
+          content: Text(details),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text(Translations.getText('cancel', lang)),
+            ),
+            if (openDeviceLocationSettings)
+              TextButton(
+                onPressed: () async {
+                  Navigator.of(dialogContext).pop();
+                  await Geolocator.openLocationSettings();
+                },
+                child: Text(
+                  lang == 'ar' ? 'إعدادات الموقع' : 'Location Settings',
+                ),
+              ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(dialogContext).pop();
+                if (openAppSettingsDirectly || !openDeviceLocationSettings) {
+                  await Geolocator.openAppSettings();
+                }
+              },
+              child: Text(Translations.getText('app_settings', lang)),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _startLocationUpdates() {
@@ -1284,13 +1347,13 @@ class _AttendanceScreenState extends State<AttendanceScreen>
   }
 
   // دالة إعادة المحاولة
-  void _retryOperation() {
+  Future<void> _retryOperation() async {
     setState(() {
       _isSuccess = null;
       _resultMessage = '';
       _resultDetails = '';
     });
-    _processAttendance();
+    await _refreshPage();
   }
 
   // دالة جديدة لتحليل رسائل الخطأ من API
