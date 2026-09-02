@@ -319,6 +319,13 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       _lastProactiveCapturedJpg = bytes;
       _lastProactiveCapturedFace = faces.first;
       _lastProactiveCapturedAt = DateTime.now();
+    } else if (Platform.isIOS &&
+        (_currentDetectedFace != null || _lastValidFace != null)) {
+      // على iPhone قد لا يلتقط ML Kit الوجه من الصورة الثابتة الأخيرة
+      // رغم أن البث الحي أكد وجود وجه صالح قبلها مباشرة.
+      _lastProactiveCapturedJpg = bytes;
+      _lastProactiveCapturedFace = _currentDetectedFace ?? _lastValidFace!;
+      _lastProactiveCapturedAt = DateTime.now();
     }
   }
 
@@ -359,39 +366,15 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
 
   Future<bool> _prepareIosStillImageBeforeSave() async {
     if (!Platform.isIOS) return true;
-    if (_hasReadyIosStillImage) return true;
-    if (_isProactiveCapturing) {
-      for (int i = 0; i < 10; i++) {
-        await Future.delayed(const Duration(milliseconds: 120));
-        if (_hasReadyIosStillImage) return true;
-      }
-    }
-
-    final previousStatus = _statusMessage;
-    if (mounted) {
-      setState(() {
-        _statusMessage =
-            'جاري تجهيز صورة الوجه على iPhone، ابق ثابتاً للحظة...';
-      });
-    }
-
-    final ready = await _ensureFreshIosProactiveCapture(attempts: 5);
-    if (!ready) {
-      await Future.delayed(const Duration(milliseconds: 250));
-      try {
-        await _runProactiveCaptureOnce();
-      } catch (_) {}
-    }
-
+    final hasLiveFace = _currentDetectedFace != null || _lastValidFace != null;
     if (mounted && !_isProcessing && !_isSavingToServer) {
       setState(() {
-        _statusMessage = _hasReadyIosStillImage
-            ? 'تم تجهيز صورة واضحة، جاري الحفظ...'
-            : previousStatus;
+        _statusMessage = hasLiveFace
+            ? 'تم تثبيت الوجه على iPhone، سيتم التقاط صورة واحدة فقط الآن.'
+            : 'لم يتم تثبيت الوجه بعد. ابق داخل الإطار للحظة ثم أعد المحاولة.';
       });
     }
-
-    return _hasReadyIosStillImage;
+    return hasLiveFace;
   }
 
   Future<Uint8List> _prepareImageBytesForServerUpload(
@@ -923,13 +906,10 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
             _stabilizationTimer = Timer(const Duration(milliseconds: 1200), () {
               if (!mounted || _autoCaptureInProgress) return;
               if (_goodPoseFramesCount >= _requiredGoodFrames ~/ 2) {
-                if (Platform.isIOS && !_hasReadyIosStillImage) {
-                  unawaited(_prepareIosStillImageBeforeSave());
-                  return;
-                }
-                if (kDebugMode)
+                if (kDebugMode) {
                   print(
                       '🎯 [Auto-Capture] تم استقرار الوضع → بدء التصوير التلقائي!');
+                }
                 _manualOrAutoCapture();
               }
             });
@@ -1050,36 +1030,35 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
     ));
     // #endregion
     if (_autoCaptureInProgress || _isProcessing || _isSavingToServer) return;
-    if (Platform.isIOS) {
-      final iosReady = await _prepareIosStillImageBeforeSave();
-      if (!iosReady) {
-        // #region debug-point B:ios-still-not-ready
-        unawaited(_reportDebugEvent(
-          'B',
-          'face_enrollment_screen_mobile.dart:_manualOrAutoCapture',
-          'Enrollment capture deferred because iPhone still image is not ready',
-          data: {
-            'hasReadyIosStillImage': _hasReadyIosStillImage,
-            'isProactiveCapturing': _isProactiveCapturing,
-            'lastProactiveFace': _lastProactiveCapturedFace != null,
-            'lastProactiveJpg': _lastProactiveCapturedJpg != null,
-          },
-        ));
-        // #endregion
-        if (mounted) {
-          setState(() {
-            _statusMessage =
-                'لم تجهز صورة الحفظ على iPhone بعد. ابق ثابتاً داخل الإطار ثم أعد المحاولة بعد لحظة.';
-          });
-        }
-        return;
-      }
-    }
     _autoCaptureInProgress = true;
-    _stabilizationTimer?.cancel();
-    _stabilizationTimer = null;
-    await _captureAndSaveEmployeeFace();
-    if (mounted) _autoCaptureInProgress = false;
+    try {
+      if (Platform.isIOS) {
+        final iosReady = await _prepareIosStillImageBeforeSave();
+        if (!iosReady) {
+          // #region debug-point B:ios-still-not-ready
+          unawaited(_reportDebugEvent(
+            'B',
+            'face_enrollment_screen_mobile.dart:_manualOrAutoCapture',
+            'Enrollment capture deferred because iPhone live face is not ready',
+            data: {
+              'hasReadyIosStillImage': _hasReadyIosStillImage,
+              'isProactiveCapturing': _isProactiveCapturing,
+              'lastProactiveFace': _lastProactiveCapturedFace != null,
+              'lastProactiveJpg': _lastProactiveCapturedJpg != null,
+              'hasCurrentFace': _currentDetectedFace != null,
+              'hasLastValidFace': _lastValidFace != null,
+            },
+          ));
+          // #endregion
+          return;
+        }
+      }
+      _stabilizationTimer?.cancel();
+      _stabilizationTimer = null;
+      await _captureAndSaveEmployeeFace();
+    } finally {
+      if (mounted) _autoCaptureInProgress = false;
+    }
   }
 
   Future<void> _captureAndSaveEmployeeFace() async {
@@ -1117,9 +1096,6 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       phase = 'CAPTURE_IMAGE';
       String fallbackUsed = 'NONE';
       try {
-        if (Platform.isIOS) {
-          await _ensureFreshIosProactiveCapture(attempts: 5);
-        }
         if (Platform.isIOS && _hasReadyIosStillImage) {
           finalImageBytes = _lastProactiveCapturedJpg!;
           finalFace = _lastProactiveCapturedFace!;
@@ -1168,6 +1144,15 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
             fallbackUsed = 'DIRECT';
             if (kDebugMode)
               print('💾 [$tid] (${t2}ms) PHASE 1A OK: takePicture() مباشر');
+          } else if (Platform.isIOS &&
+              (_currentDetectedFace != null || _lastValidFace != null)) {
+            finalImageBytes = bytesXFile;
+            finalFace = _currentDetectedFace ?? _lastValidFace!;
+            fallbackUsed = 'IOS_LIVE_FACE_FALLBACK';
+            if (kDebugMode) {
+              print(
+                  '💾 [$tid] (${t2}ms) PHASE 1A OK: iPhone fallback → استخدام وجه البث المباشر مع الصورة الثابتة');
+            }
           } else {
             failReason = 'NO_FACE_IN_CAPTURED';
             throw Exception('لا يوجد وجه → Fallback JPG.');

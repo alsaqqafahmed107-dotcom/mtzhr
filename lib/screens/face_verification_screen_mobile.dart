@@ -619,7 +619,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   String _formatDialogMessage(String message, {String? rawDetails}) {
     final normalizedMessage = message.trim();
-    final normalizedDetails = rawDetails?.trim();
+    final normalizedDetails = _sanitizeRawDetails(rawDetails);
     if (normalizedDetails == null ||
         normalizedDetails.isEmpty ||
         normalizedDetails == normalizedMessage) {
@@ -631,6 +631,161 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     }
 
     return '$normalizedMessage\n\nTechnical details:\n$normalizedDetails';
+  }
+
+  String? _sanitizeRawDetails(String? rawDetails) {
+    if (rawDetails == null) return null;
+    final raw = rawDetails.trim();
+    if (raw.isEmpty) return null;
+    final lower = raw.toLowerCase();
+
+    if (lower.startsWith('bad state:')) {
+      final cleaned = raw.substring('bad state:'.length).trim();
+      return cleaned.isEmpty ? null : cleaned;
+    }
+
+    if (lower.contains('null check operator used on a null value')) {
+      return _lang() == 'ar'
+          ? 'تم فقدان مرجع داخلي مؤقتاً أثناء التحقق وتمت حماية الشاشة من الانهيار.'
+          : 'A temporary internal camera reference was lost during verification and was handled safely.';
+    }
+
+    if (lower.contains('camera') && lower.contains('disposed')) {
+      return _lang() == 'ar'
+          ? 'تم إغلاق الكاميرا أو إعادة تهيئتها أثناء التحقق.'
+          : 'The camera was closed or reinitialized during verification.';
+    }
+
+    return raw;
+  }
+
+  String _friendlyVerificationFailureMessage(
+    String message, {
+    String? rawDetails,
+    String? phase,
+  }) {
+    final combined = '$message\n${rawDetails ?? ''}'.trim();
+    final lower = combined.toLowerCase();
+
+    if (lower.contains('open_eyes') ||
+        lower.contains('فتح عينيك') ||
+        lower.contains('افتح عينيك') ||
+        lower.contains('eye')) {
+      return _lang() == 'ar'
+          ? 'لم تكتمل قراءة العينين بوضوح. انظر مباشرة إلى الكاميرا وافتح عينيك بشكل طبيعي ثم أعد المحاولة.'
+          : 'The eyes were not captured clearly. Look directly at the camera, keep your eyes naturally open, and try again.';
+    }
+
+    if (lower.contains('look straight') ||
+        lower.contains('look_straight') ||
+        lower.contains('بدون ميل') ||
+        lower.contains('انظر مباشرة')) {
+      return _lang() == 'ar'
+          ? 'وضعية الوجه غير مناسبة للتحقق. اجعل وجهك مستقيماً داخل الإطار بدون ميل ثم أعد المحاولة.'
+          : 'Face pose is not suitable for verification. Keep your face straight inside the frame without tilting, then try again.';
+    }
+
+    if (lower.contains('no face detected') ||
+        lower.contains('لم يتم اكتشاف وجه')) {
+      return _lang() == 'ar'
+          ? 'لم يتم التقاط وجه واضح في اللحظة النهائية. ابق وجهك داخل الإطار وبإضاءة جيدة ثم أعد المحاولة.'
+          : 'No clear face was captured at the final moment. Keep your face inside the frame with good lighting and try again.';
+    }
+
+    if (lower.contains('more than one face') ||
+        lower.contains('أكثر من وجه')) {
+      return _lang() == 'ar'
+          ? 'تم اكتشاف أكثر من وجه داخل الإطار. يجب أن يظهر وجه موظف واحد فقط أثناء التحقق.'
+          : 'More than one face was detected in the frame. Only one employee face must be visible during verification.';
+    }
+
+    if (lower.contains('timeout') ||
+        lower.contains('timed out') ||
+        lower.contains('استغرق') ||
+        lower.contains('مهلة')) {
+      return _lang() == 'ar'
+          ? 'استغرقت عملية التحقق وقتاً أطول من المتوقع. تحقق من الاتصال والخادم ثم أعد المحاولة.'
+          : 'Verification took longer than expected. Check connectivity and the backend service, then try again.';
+    }
+
+    if (lower.contains('socket') ||
+        lower.contains('connection') ||
+        lower.contains('network') ||
+        lower.contains('خطأ في الاتصال')) {
+      return _lang() == 'ar'
+          ? 'تعذر إكمال التحقق بسبب مشكلة اتصال مع الخادم. تأكد من الشبكة ثم أعد المحاولة.'
+          : 'Verification could not be completed because of a server connection issue. Check the network and try again.';
+    }
+
+    if (lower.contains('غير متزامن مع وقت الخادم')) {
+      return _lang() == 'ar'
+          ? 'تم التحقق من الوجه، لكن الخادم رفض اعتماد الطابع الزمني للتحقق. تم تحسين هذا المسار، وإذا تكررت الرسالة فتأكد من تحديث نسخة الخادم أيضاً.'
+          : 'Face verification succeeded, but the server rejected the verification timestamp. This path has been improved; if it still happens, make sure the backend is updated too.';
+    }
+
+    if (lower.contains('تعذر تأكيد التحقق من الوجه من سجلات الخادم')) {
+      return _lang() == 'ar'
+          ? 'الخادم لم يجد سجلاً حديثاً يؤكد نجاح التحقق. أعد المحاولة فوراً، وإذا تكرر ذلك فراجع خدمة الخادم وسجل FaceLogs.'
+          : 'The server could not find a recent record confirming verification success. Retry immediately, and if it repeats, review the backend service and FaceLogs.';
+    }
+
+    if (lower.contains('لا تتطابق') ||
+        lower.contains('not match') ||
+        lower.contains('mismatch')) {
+      return _lang() == 'ar'
+          ? 'الوجه الحالي لا يطابق السجل المحفوظ بشكل كافٍ. تأكد من الإضاءة والزاوية ثم أعد المحاولة.'
+          : 'The current face does not match the stored record closely enough. Check lighting and angle, then try again.';
+    }
+
+    if (lower.contains('bad state')) {
+      return _lang() == 'ar'
+          ? 'حدث تعارض داخلي مؤقت أثناء التحقق، وتمت حماية الشاشة من الانهيار. أعد المحاولة مرة أخرى.'
+          : 'A temporary internal verification conflict occurred and was handled safely. Please try again.';
+    }
+
+    return message.trim().isEmpty
+        ? (_lang() == 'ar'
+            ? 'تعذر إكمال التحقق من الوجه. أعد المحاولة مرة أخرى.'
+            : 'Face verification could not be completed. Please try again.')
+        : message.trim();
+  }
+
+  String? _detectVerificationResultAnomaly(dynamic result) {
+    if (result == null) return null;
+    if (result is! Map) {
+      return _lang() == 'ar'
+          ? 'تم استلام رد غير متوقع من خدمة التحقق. يرجى إعادة المحاولة.'
+          : 'An unexpected verification response was received. Please try again.';
+    }
+
+    final success = result['Success'] == true ||
+        result['success'] == true ||
+        result['SUCCESS'] == true;
+    final matched = result['IsMatch'] == true || result['Matched'] == true;
+    final employee = (result['EmployeeNumber'] ?? result['employeeNumber'] ?? '')
+        .toString()
+        .trim();
+    final confidence = (result['ConfidenceScore'] as num?)?.toDouble();
+
+    if (employee.isNotEmpty && employee != widget.employeeNumber) {
+      return _lang() == 'ar'
+          ? 'رد خدمة التحقق يخص موظفاً مختلفاً عن الموظف الحالي، لذلك تم إيقاف العملية.'
+          : 'The verification response belongs to a different employee, so the operation was stopped.';
+    }
+
+    if (success && !matched) {
+      return _lang() == 'ar'
+          ? 'رد الخادم يشير إلى نجاح شكلي بدون تأكيد مطابقة الوجه، لذلك تم رفض النتيجة لحماية العملية.'
+          : 'The server response indicated a nominal success without confirming a face match, so the result was rejected for safety.';
+    }
+
+    if (matched && confidence != null && confidence < 0.65) {
+      return _lang() == 'ar'
+          ? 'الخادم أعاد مطابقة بدرجة ثقة منخفضة وغير مقبولة، لذلك تم رفض النتيجة.'
+          : 'The server returned a match with an insufficient confidence score, so the result was rejected.';
+    }
+
+    return null;
   }
 
   String _friendlyCameraErrorMessage(Object error) {
@@ -1818,7 +1973,13 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           });
         }
       } else {
-        final msg = lastApiErr ?? _t('verification_failed');
+        final anomaly = _detectVerificationResultAnomaly(finalResult);
+        final msg = anomaly ??
+            _friendlyVerificationFailureMessage(
+              lastApiErr ?? _t('verification_failed'),
+              rawDetails: finalResult?['Message']?.toString(),
+              phase: phase,
+            );
         // #region debug-point E:verification-failed-final
         unawaited(_reportDebugEvent(
           'E',
@@ -1861,12 +2022,23 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           rawDetails: e.toString(),
         );
       } else if (e is StateError) {
-        _handleFailure(e.message, rawDetails: e.toString());
+        _handleFailure(
+          _friendlyVerificationFailureMessage(
+            e.message,
+            rawDetails: e.toString(),
+            phase: phase,
+          ),
+          rawDetails: e.toString(),
+        );
       } else {
         _handleFailure(
-          _tParams(
-            'connection_error_with_error',
-            {'error': e.toString().split('\n').first},
+          _friendlyVerificationFailureMessage(
+            _tParams(
+              'connection_error_with_error',
+              {'error': e.toString().split('\n').first},
+            ),
+            rawDetails: e.toString(),
+            phase: phase,
           ),
           rawDetails: e.toString(),
         );
