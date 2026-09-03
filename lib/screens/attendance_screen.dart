@@ -1205,7 +1205,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
       // جمع معلومات الجهاز
       final rawDeviceInfo = await _getDeviceInfo();
-      final deviceInfo = _usedFaceVerification
+      final faceAuthInUse = _usedFaceVerification || shouldRequireFace;
+      final deviceInfo = faceAuthInUse
           ? jsonEncode({
               'device': rawDeviceInfo,
               'attendanceAuth': 'FACE',

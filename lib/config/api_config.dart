@@ -6,6 +6,9 @@ import 'api_discovery.dart';
 
 class ApiConfig {
   static const String _prefsBaseUrlKey = 'api_base_url';
+  static const String _debugServerUrl =
+      'http://192.168.1.163:7777/event';
+  static const String _debugSessionId = 'face-legacy-server';
   static const String _defaultBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
     defaultValue: 'http://192.168.1.163:333/',
@@ -90,21 +93,78 @@ class ApiConfig {
     return '$b/$e';
   }
 
+  static Future<void> _reportDebugEvent({
+    required String hypothesisId,
+    required String location,
+    required String message,
+    Map<String, dynamic>? data,
+  }) async {
+    try {
+      await http.post(
+        Uri.parse(_debugServerUrl),
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'sessionId': _debugSessionId,
+          'runId': 'pre-fix',
+          'hypothesisId': hypothesisId,
+          'location': location,
+          'msg': '[DEBUG] $message',
+          'data': data ?? const <String, dynamic>{},
+          'ts': DateTime.now().millisecondsSinceEpoch,
+        }),
+      );
+    } catch (_) {}
+  }
+
   // دالة لتهيئة النظام وجلب الرابط المحول
   static Future<void> initialize() async {
     if (_isInitialized) return;
 
     try {
       debugPrint('🔍 جاري اكتشاف الرابط المحول...');
+      // #region debug-point A:api-config-init-start
+      _reportDebugEvent(
+        hypothesisId: 'A',
+        location: 'api_config.dart:initialize:start',
+        message: 'ApiConfig initialization started',
+        data: {
+          'defaultBaseUrl': _defaultBaseUrl,
+          'currentBaseUrl': _baseUrl,
+          'isInitialized': _isInitialized,
+        },
+      );
+      // #endregion
 
       final prefs = await SharedPreferences.getInstance();
       final savedBaseUrl = prefs.getString(_prefsBaseUrlKey);
+      // #region debug-point A:api-config-saved-base-url
+      _reportDebugEvent(
+        hypothesisId: 'A',
+        location: 'api_config.dart:initialize:savedBaseUrl',
+        message: 'Loaded saved base URL preference',
+        data: {
+          'savedBaseUrl': savedBaseUrl,
+          'hasSavedBaseUrl': savedBaseUrl != null && savedBaseUrl.trim().isNotEmpty,
+        },
+      );
+      // #endregion
       if (savedBaseUrl != null && savedBaseUrl.trim().isNotEmpty) {
         _baseUrl = savedBaseUrl.trim();
       }
 
       _baseUrl = _normalizeBaseUrl(_baseUrl);
       final discovered = await discoverBaseUrl(_baseUrl);
+      // #region debug-point A:api-config-discovery-result
+      _reportDebugEvent(
+        hypothesisId: 'A',
+        location: 'api_config.dart:initialize:discoverBaseUrl',
+        message: 'Base URL discovery finished',
+        data: {
+          'normalizedBaseUrl': _baseUrl,
+          'discoveredBaseUrl': discovered,
+        },
+      );
+      // #endregion
       if (discovered != null && discovered.isNotEmpty) {
         _baseUrl = _normalizeBaseUrl(discovered);
         debugPrint('✅ تم اكتشاف رابط محول: $_baseUrl');
@@ -113,11 +173,33 @@ class ApiConfig {
       }
 
       _isInitialized = true;
+      // #region debug-point A:api-config-init-finish
+      _reportDebugEvent(
+        hypothesisId: 'A',
+        location: 'api_config.dart:initialize:finish',
+        message: 'ApiConfig initialization finished',
+        data: {
+          'finalBaseUrl': _baseUrl,
+          'isUsingCustomBaseUrl': isUsingCustomBaseUrl,
+        },
+      );
+      // #endregion
     } catch (e) {
       debugPrint(
           '⚠️ فشل اكتشاف الرابط التلقائي، سيتم استخدام الرابط الافتراضي: $_baseUrl');
       debugPrint('Error: $e');
       _isInitialized = true;
+      // #region debug-point A:api-config-init-error
+      _reportDebugEvent(
+        hypothesisId: 'A',
+        location: 'api_config.dart:initialize:error',
+        message: 'ApiConfig initialization failed',
+        data: {
+          'baseUrlAtFailure': _baseUrl,
+          'error': e.toString(),
+        },
+      );
+      // #endregion
     }
   }
 

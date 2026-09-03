@@ -1213,7 +1213,7 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
         'platform': Platform.operatingSystem,
         'consentApproved': true,
         'retentionYears': 5,
-        'flowVersion': 'ENROLL_V1',
+        'flowVersion': 'ENROLL_V2',
         'captureBytesKb': finalImageBytes!.length ~/ 1024,
         'uploadBytesKb': uploadBytes.length ~/ 1024,
       };

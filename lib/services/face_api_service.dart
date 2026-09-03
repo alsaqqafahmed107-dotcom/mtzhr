@@ -5,6 +5,9 @@ import 'package:flutter/foundation.dart';
 import '../config/api_config.dart';
 
 class FaceApiService {
+  static const String _debugServerUrl =
+      'http://192.168.1.163:7777/event';
+  static const String _debugSessionId = 'face-legacy-server';
   // ========================================================================
   // 🛡️ الحماية الفائقة (Global Success Flag) — لتفادي مشاكل Navigator.pop
   // التي قد تفشل لأي سبب (Hot Restart, سياق قديم، إغلاق سريع جداً للشاشة،
@@ -84,6 +87,29 @@ class FaceApiService {
     if (kDebugMode) {
       print('👤 [FaceApiService] $message');
     }
+  }
+
+  static Future<void> _reportDebugEvent({
+    required String hypothesisId,
+    required String location,
+    required String message,
+    Map<String, dynamic>? data,
+  }) async {
+    try {
+      await http.post(
+        Uri.parse(_debugServerUrl),
+        headers: const {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'sessionId': _debugSessionId,
+          'runId': 'pre-fix',
+          'hypothesisId': hypothesisId,
+          'location': location,
+          'msg': '[DEBUG] $message',
+          'data': data ?? const <String, dynamic>{},
+          'ts': DateTime.now().millisecondsSinceEpoch,
+        }),
+      );
+    } catch (_) {}
   }
 
   static Future<Map<String, dynamic>> _requestJsonWithRetry({
@@ -276,6 +302,54 @@ class FaceApiService {
     return result;
   }
 
+  static Map<String, dynamic> _unsupportedEndpointResult(String endpointName) {
+    return _withEndpointMetadata(
+      {
+        'Success': false,
+        'StatusCode': 404,
+        'Message':
+            'نسخة الخادم الحالية لا تدعم المسار الجديد الخاص بالوجه (`$endpointName`). '
+                'يجب إعادة نشر الـ API المحدث ثم إعادة المحاولة.',
+      },
+      endpointMode: endpointName,
+      usedLegacyFallback: false,
+    );
+  }
+
+  static Map<String, dynamic> _normalizeLegacyServerMessage(
+    Map<String, dynamic> result,
+  ) {
+    final message = (result['Message'] ?? '').toString();
+    final lower = message.toLowerCase();
+    final looksLikeOldDeviceBinding = message.contains('هاتف موثوق') ||
+        message.contains('الهاتف المعتمد') ||
+        message.contains('مرتبطة بهاتف') ||
+        lower.contains('trusted device');
+
+    if (!looksLikeOldDeviceBinding) {
+      return result;
+    }
+
+    // #region debug-point D:legacy-message-detected
+    _reportDebugEvent(
+      hypothesisId: 'D',
+      location: 'face_api_service.dart:_normalizeLegacyServerMessage',
+      message: 'Detected legacy-style device binding message from server',
+      data: {
+        'baseUrl': ApiConfig.baseUrl,
+        'message': message,
+        'statusCode': result['StatusCode'] ?? result['statusCode'],
+        'endpointMode': result['EndpointMode'],
+      },
+    );
+    // #endregion
+    result['Message'] =
+        'الخادم الذي يرد على الطلب ما زال يعمل بنسخة قديمة من منطق بصمة الوجه. '
+        'يجب إعادة نشر الـ API المحدث أو إعادة تشغيله ثم المحاولة مرة أخرى.';
+    result['LegacyServerMessageDetected'] = true;
+    return result;
+  }
+
   /// 🆕 حفظ صورة الوجه في جدول Users_Employees (خلال التسجيل - لا فحص حياة)
   static Future<Map<String, dynamic>> saveEmployeeFaceImage({
     required int clientId,
@@ -285,6 +359,19 @@ class FaceApiService {
   }) async {
     final url = ApiConfig.getSaveEmployeeFaceImageUrl(clientId);
     _log('💾 [NEW FLOW] Save Employee Face Image: Emp=$employeeNumber | Client=$clientId | حجم الصورة (Base64)=${imageBase64.length ~/ 1024}KB');
+    // #region debug-point C:save-request-start
+    _reportDebugEvent(
+      hypothesisId: 'C',
+      location: 'face_api_service.dart:saveEmployeeFaceImage:start',
+      message: 'Starting employee face save request',
+      data: {
+        'url': url,
+        'baseUrl': ApiConfig.baseUrl,
+        'employeeNumber': employeeNumber,
+        'deviceInfoLength': deviceInfo?.length,
+      },
+    );
+    // #endregion
 
     final body = {
       'EmployeeNumber': employeeNumber,
@@ -295,7 +382,7 @@ class FaceApiService {
       'RetentionPolicyDays': 365 * 5,
     };
 
-    final newResult = await _requestJsonWithRetry(
+    final newResult = _normalizeLegacyServerMessage(await _requestJsonWithRetry(
       request: () => http.post(
         _uri(url),
         headers: ApiConfig.headers,
@@ -303,22 +390,26 @@ class FaceApiService {
       ),
       timeout: const Duration(seconds: 120),
       maxAttempts: 2,
+    ));
+    // #region debug-point B:save-request-response
+    _reportDebugEvent(
+      hypothesisId: 'B',
+      location: 'face_api_service.dart:saveEmployeeFaceImage:response',
+      message: 'Employee face save request completed',
+      data: {
+        'url': url,
+        'success': newResult['Success'],
+        'statusCode': newResult['StatusCode'] ?? newResult['statusCode'],
+        'message': newResult['Message'],
+        'legacyDetected': newResult['LegacyServerMessageDetected'] == true,
+      },
     );
+    // #endregion
 
-    // 🔄 🛡️ Fallback: إذا لم يكن الـ Endpoint الجديد منشور بعد → استخدم القديم
+    // لا نرجع للمسار القديم تلقائياً حتى لا نعيد تفعيل سلوك legacy غير المرغوب.
     if (_isNotFound404(newResult)) {
-      _log('🔄 [FALLBACK] ❌ الـ Endpoint الجديد (save) غير موجود (404) — التبديل التلقائي إلى enrollFace القديم (biometric/face/enroll)...');
-      final fallbackResult = await enrollFace(
-        clientId: clientId,
-        employeeNumber: employeeNumber,
-        imageBase64: imageBase64,
-        deviceInfo: deviceInfo,
-      );
-      return _withEndpointMetadata(
-        fallbackResult,
-        endpointMode: 'biometric-face-enroll-fallback',
-        usedLegacyFallback: true,
-      );
+      _log('❌ [NEW FLOW] endpoint save غير موجود على الخادم - تم إيقاف fallback إلى legacy.');
+      return _unsupportedEndpointResult('employee-face-save');
     }
     return _withEndpointMetadata(
       newResult,
@@ -334,22 +425,43 @@ class FaceApiService {
   ) async {
     final url = ApiConfig.getEmployeeFaceImageStatusUrl(clientId, employeeNumber);
     _log('🔍 [NEW FLOW] Checking Employee Face Image Status: $url');
+    // #region debug-point C:status-request-start
+    _reportDebugEvent(
+      hypothesisId: 'C',
+      location: 'face_api_service.dart:getEmployeeFaceImageStatus:start',
+      message: 'Starting employee face status request',
+      data: {
+        'url': url,
+        'baseUrl': ApiConfig.baseUrl,
+        'employeeNumber': employeeNumber,
+      },
+    );
+    // #endregion
 
-    final newResult = await _requestJsonWithRetry(
+    final newResult = _normalizeLegacyServerMessage(await _requestJsonWithRetry(
       request: () => http.get(_uri(url), headers: ApiConfig.headers),
       timeout: const Duration(seconds: 30),
       maxAttempts: 2,
+    ));
+    // #region debug-point B:status-request-response
+    _reportDebugEvent(
+      hypothesisId: 'B',
+      location: 'face_api_service.dart:getEmployeeFaceImageStatus:response',
+      message: 'Employee face status request completed',
+      data: {
+        'url': url,
+        'success': newResult['Success'],
+        'statusCode': newResult['StatusCode'] ?? newResult['statusCode'],
+        'message': newResult['Message'],
+        'legacyDetected': newResult['LegacyServerMessageDetected'] == true,
+      },
     );
+    // #endregion
 
-    // 🔄 🛡️ Fallback: إذا لم يكن الـ Endpoint الجديد منشور بعد
+    // لا نرجع للمسار القديم تلقائياً حتى لا نقرأ حالة legacy قديمة من الخادم.
     if (_isNotFound404(newResult)) {
-      _log('🔄 [FALLBACK] ❌ الـ Endpoint الجديد (status) غير موجود (404) — التبديل التلقائي إلى getFaceStatus القديم (biometric/face/status)...');
-      final fallbackResult = await getFaceStatus(clientId, employeeNumber);
-      return _withEndpointMetadata(
-        fallbackResult,
-        endpointMode: 'biometric-face-status-fallback',
-        usedLegacyFallback: true,
-      );
+      _log('❌ [NEW FLOW] endpoint status غير موجود على الخادم - تم إيقاف fallback إلى legacy.');
+      return _unsupportedEndpointResult('employee-face-status');
     }
     return _withEndpointMetadata(
       newResult,
@@ -371,6 +483,20 @@ class FaceApiService {
   }) async {
     final url = ApiConfig.getVerifyFaceWithStoredImageUrl(clientId);
     _log('👤 [NEW FLOW] Verify Face (with Stored Image + Liveness): Emp=$employeeNumber | Client=$clientId | حجم الصورة=${imageBase64.length ~/ 1024}KB | Liveness=${livenessScore?.toStringAsFixed(2) ?? "N/A"}');
+    // #region debug-point C:verify-request-start
+    _reportDebugEvent(
+      hypothesisId: 'C',
+      location: 'face_api_service.dart:verifyFaceWithStoredImage:start',
+      message: 'Starting employee face verify request',
+      data: {
+        'url': url,
+        'baseUrl': ApiConfig.baseUrl,
+        'employeeNumber': employeeNumber,
+        'livenessScore': livenessScore,
+        'spoofRisk': spoofRisk,
+      },
+    );
+    // #endregion
 
     final body = {
       'EmployeeNumber': employeeNumber,
@@ -383,7 +509,7 @@ class FaceApiService {
       'MatchSource': 'USERS_EMPLOYEES_STORED_IMAGE',
     };
 
-    final newResult = await _requestJsonWithRetry(
+    final newResult = _normalizeLegacyServerMessage(await _requestJsonWithRetry(
       request: () => http.post(
         _uri(url),
         headers: ApiConfig.headers,
@@ -391,23 +517,27 @@ class FaceApiService {
       ),
       timeout: timeout,
       maxAttempts: 2,
+    ));
+    // #region debug-point B:verify-request-response
+    _reportDebugEvent(
+      hypothesisId: 'B',
+      location: 'face_api_service.dart:verifyFaceWithStoredImage:response',
+      message: 'Employee face verify request completed',
+      data: {
+        'url': url,
+        'success': newResult['Success'],
+        'statusCode': newResult['StatusCode'] ?? newResult['statusCode'],
+        'message': newResult['Message'],
+        'legacyDetected': newResult['LegacyServerMessageDetected'] == true,
+        'endpointMode': newResult['EndpointMode'],
+      },
     );
+    // #endregion
 
-    // 🔄 🛡️ Fallback: إذا لم يكن الـ Endpoint الجديد منشور بعد
+    // لا نرجع للمسار القديم تلقائياً حتى لا تظهر رسائل قديمة من خادم legacy.
     if (_isNotFound404(newResult)) {
-      _log('🔄 [FALLBACK] ❌ الـ Endpoint الجديد (verify) غير موجود (404) — التبديل التلقائي إلى verifyFace القديم (biometric/face/verify)...');
-      final fallbackResult = await verifyFace(
-        clientId: clientId,
-        employeeNumber: employeeNumber,
-        imageBase64: imageBase64,
-        deviceInfo: deviceInfo,
-        timeout: timeout,
-      );
-      return _withEndpointMetadata(
-        fallbackResult,
-        endpointMode: 'biometric-face-verify-fallback',
-        usedLegacyFallback: true,
-      );
+      _log('❌ [NEW FLOW] endpoint verify غير موجود على الخادم - تم إيقاف fallback إلى legacy.');
+      return _unsupportedEndpointResult('employee-face-verify');
     }
     return _withEndpointMetadata(
       newResult,

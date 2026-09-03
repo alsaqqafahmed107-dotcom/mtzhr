@@ -194,14 +194,22 @@ class PassiveLivenessSnapshot {
 
 class LivenessDetectionService {
   static const int _totalSignals = 7;
-  static const int _minFramesForAnalysis = 12;
+  static const int _minFramesForAnalysis = 16;
   static const int _maxFramesBuffer = 72;
   static const int _requiredSignals = _totalSignals;
   static const double _blinkThresholdLow = 0.33;
   static const double _blinkThresholdHigh = 0.72;
   static const double _maxYawDegrees = 30.0;
   static const double _maxPitchDegrees = 25.0;
-  static const double _spoofRejectThreshold = 0.74;
+  static const double _spoofRejectThreshold = 0.60;
+  static const double _antiSpoofPassThreshold = 0.62;
+  static const double _texturePassThreshold = 0.52;
+  static const double _minimumOverallPassScore = 0.64;
+  static const double _maxAverageDepthRiskForPass = 0.42;
+  static const int _minDepthFramesForPass = 8;
+  static const int _minFaceFramesForPass = 18;
+  static const int _minBlinkCountForPass = 1;
+  static const Duration _minStableSessionDuration = Duration(seconds: 4);
 
   final List<LivenessFrameData> _frameBuffer = [];
   final List<double> _depthRiskHistory = [];
@@ -246,6 +254,9 @@ class LivenessDetectionService {
   }
 
   PassiveLivenessSnapshot get currentSnapshot => _currentSnapshot;
+
+  Duration get sessionElapsed =>
+      _sessionStart == null ? Duration.zero : DateTime.now().difference(_sessionStart!);
 
   void initialize({int requiredChallenges = 0}) {
     _frameBuffer.clear();
@@ -332,7 +343,7 @@ class LivenessDetectionService {
 
     _refreshPassiveSnapshot();
 
-    if (_currentSnapshot.antiSpoofScore < 0.24 &&
+    if (_currentSnapshot.antiSpoofScore < 0.38 &&
         _frameBuffer.length >= _minFramesForAnalysis) {
       _currentStatus = LivenessStatus.spoofDetected;
       _emitStatus();
@@ -429,11 +440,13 @@ class LivenessDetectionService {
     final antiSpoofScore = (1.0 - spoofRisk).clamp(0.0, 1.0);
     final trackingPassed = trackingScore >= 0.42;
     final posePassed = poseScore >= 0.58;
-    final eyeActivityPassed = eyeActivityScore >= 0.18;
+    final eyeActivityPassed = eyeActivityScore >= 0.20;
     final breathingPassed = breathingScore >= 0.12;
-    final texturePassed = textureScore >= 0.42;
+    final texturePassed = textureScore >= _texturePassThreshold;
     final landmarkPassed = landmarkScore >= 0.55;
-    final antiSpoofPassed = antiSpoofScore >= 0.45;
+    final antiSpoofPassed = antiSpoofScore >= _antiSpoofPassThreshold &&
+        _depthRiskHistory.length >= _minDepthFramesForPass &&
+        averageDepthSpoofRisk <= _maxAverageDepthRiskForPass;
 
     _passedChecks
       ..clear()
@@ -454,19 +467,23 @@ class LivenessDetectionService {
 
     evaluateSignal('face_tracking_stable', trackingScore, 0.42);
     evaluateSignal('pose_within_range', poseScore, 0.58);
-    evaluateSignal('eye_activity_present', eyeActivityScore, 0.18);
+    evaluateSignal('eye_activity_present', eyeActivityScore, 0.20);
     evaluateSignal('respiration_pattern_present', breathingScore, 0.12);
-    evaluateSignal('skin_texture_natural', textureScore, 0.42);
+    evaluateSignal('skin_texture_natural', textureScore, _texturePassThreshold);
     evaluateSignal('landmark_coverage_ok', landmarkScore, 0.55);
-    evaluateSignal('anti_spoof_ok', antiSpoofScore, 0.45);
+    evaluateSignal(
+      'anti_spoof_ok',
+      antiSpoofScore,
+      _antiSpoofPassThreshold,
+    );
 
-    final overallScore = ((trackingScore * 0.22) +
-            (poseScore * 0.18) +
-            (eyeActivityScore * 0.12) +
+    final overallScore = ((trackingScore * 0.20) +
+            (poseScore * 0.16) +
+            (eyeActivityScore * 0.16) +
             (breathingScore * 0.08) +
             (textureScore * 0.14) +
-            (landmarkScore * 0.12) +
-            (antiSpoofScore * 0.14))
+            (landmarkScore * 0.10) +
+            (antiSpoofScore * 0.16))
         .clamp(0.0, 1.0);
 
     _currentSnapshot = PassiveLivenessSnapshot(
@@ -518,7 +535,12 @@ class LivenessDetectionService {
         snapshot.breathingPassed &&
         snapshot.texturePassed &&
         snapshot.landmarkPassed &&
-        snapshot.antiSpoofPassed;
+        snapshot.antiSpoofPassed &&
+        _blinkCount >= _minBlinkCountForPass &&
+        _depthRiskHistory.length >= _minDepthFramesForPass &&
+        averageDepthSpoofRisk <= _maxAverageDepthRiskForPass &&
+        _frameBuffer.where((f) => f.face != null).length >= _minFaceFramesForPass &&
+        sessionElapsed >= _minStableSessionDuration;
   }
 
   double _calculateTrackingScore(List<LivenessFrameData> recent) {
@@ -585,10 +607,13 @@ class LivenessDetectionService {
             recent.length;
     // معايرة أخف للكاميرات الأمامية الحديثة، خاصة iPhone، بعد قياس
     // الضوضاء من منطقة الوجه نفسها بدل أخذ عينات خام من كامل الإطار.
-    final noiseScore = ((noiseAvg - 0.006) / 0.045).clamp(0.0, 1.0);
-    if (_depthRiskHistory.isEmpty) return noiseScore;
+    final noiseScore = ((noiseAvg - 0.010) / 0.050).clamp(0.0, 1.0);
+    if (_depthRiskHistory.isEmpty) {
+      // بدون تحليل عمق متراكم لا نمنح الثقة الكاملة للنسيج.
+      return (noiseScore * 0.55).clamp(0.0, 1.0);
+    }
     final depthScore = 1.0 - averageDepthSpoofRisk;
-    return ((depthScore * 0.7) + (noiseScore * 0.3)).clamp(0.0, 1.0);
+    return ((depthScore * 0.75) + (noiseScore * 0.25)).clamp(0.0, 1.0);
   }
 
   double _calculateLandmarkScore(List<LivenessFrameData> recent) {
@@ -605,17 +630,20 @@ class LivenessDetectionService {
     final breathing = _calculateBreathingScore(recent);
     final texture = _calculateTextureScore(recent);
     final tracking = _calculateTrackingScore(recent);
-    final lowMotionPenalty = motionAvg < 0.003 ? 1.0 : 0.0;
-    final blinkPenalty = eyeScore < 0.25 ? 0.8 : 0.0;
+    final lowMotionPenalty = motionAvg < 0.0045 ? 1.0 : 0.0;
+    final blinkPenalty = eyeScore < 0.30 ? 1.0 : 0.0;
+    final breathingPenalty = breathing < 0.14 ? 1.0 : 0.0;
+    final flatTexturePenalty = texture < 0.50 ? ((0.50 - texture) / 0.50) : 0.0;
     final depthPenalty =
-        _depthRiskHistory.isEmpty ? 0.18 : averageDepthSpoofRisk;
+        _depthRiskHistory.isEmpty ? 0.55 : averageDepthSpoofRisk;
     final risk = (lowMotionPenalty * 0.18) +
-        ((1.0 - poseAvg) * 0.10) +
-        (blinkPenalty * 0.10) +
-        ((1.0 - breathing) * 0.06) +
-        ((1.0 - texture) * 0.14) +
-        ((1.0 - tracking) * 0.08) +
-        (depthPenalty * 0.22);
+        ((1.0 - poseAvg) * 0.08) +
+        (blinkPenalty * 0.16) +
+        (breathingPenalty * 0.10) +
+        ((1.0 - texture) * 0.16) +
+        (flatTexturePenalty * 0.10) +
+        ((1.0 - tracking) * 0.05) +
+        (depthPenalty * 0.17);
     return risk.clamp(0.0, 1.0);
   }
 
@@ -637,13 +665,17 @@ class LivenessDetectionService {
     if (landmarkScore < 0.55) {
       return 'اقترب قليلاً حتى تظهر العينان والأنف والفم بوضوح.';
     }
-    if (eyeActivityScore < 0.18) {
-      return 'ابق طبيعياً أمام الكاميرا وارمش بشكل عفوي.';
+    if (_blinkCount < _minBlinkCountForPass || eyeActivityScore < 0.20) {
+      return 'ابق طبيعياً أمام الكاميرا وارمش مرة واحدة على الأقل.';
     }
     if (breathingScore < 0.12) {
       return 'ثبّت الهاتف فقط، وسيُحتسب التنفس الطبيعي تلقائياً.';
     }
-    if (textureScore < 0.50 || antiSpoofScore < 0.50) {
+    if (_depthRiskHistory.length < _minDepthFramesForPass) {
+      return 'استمر ثابتاً لحظة إضافية حتى يكتمل تحليل العمق والملمس ومقاومة الانتحال.';
+    }
+    if (textureScore < _texturePassThreshold ||
+        antiSpoofScore < _antiSpoofPassThreshold) {
       return 'تجنب الصور أو الشاشات واجعل الوجه الحقيقي أمام الكاميرا مباشرة.';
     }
     return 'التحليل الحيوي جاهز تقريباً، استمر ثابتاً للحظة.';
@@ -667,13 +699,17 @@ class LivenessDetectionService {
     if (landmarkScore < 0.55) {
       return 'Move a little closer so the eyes, nose, and mouth are clear.';
     }
-    if (eyeActivityScore < 0.18) {
-      return 'Stay natural in front of the camera and blink normally.';
+    if (_blinkCount < _minBlinkCountForPass || eyeActivityScore < 0.20) {
+      return 'Stay natural in front of the camera and blink at least once.';
     }
     if (breathingScore < 0.12) {
       return 'Hold the phone steady and natural breathing will be captured automatically.';
     }
-    if (textureScore < 0.50 || antiSpoofScore < 0.50) {
+    if (_depthRiskHistory.length < _minDepthFramesForPass) {
+      return 'Hold steady a little longer so depth, texture, and anti-spoof analysis can complete.';
+    }
+    if (textureScore < _texturePassThreshold ||
+        antiSpoofScore < _antiSpoofPassThreshold) {
       return 'Avoid photos or screens and use a real face directly in front of the camera.';
     }
     return 'Passive biometric analysis is almost ready, hold steady briefly.';
@@ -722,19 +758,84 @@ class LivenessDetectionService {
     await Future.delayed(const Duration(milliseconds: 250));
     final recent = _frameBuffer.where((f) => f.face != null).toList();
     final spoofRisk = _calculateSpoofRisk(recent);
-    if (spoofRisk >= _spoofRejectThreshold) {
+    if (spoofRisk >= _spoofRejectThreshold ||
+        averageDepthSpoofRisk > _maxAverageDepthRiskForPass) {
       _currentStatus = LivenessStatus.spoofDetected;
       _emitStatus();
       return;
     }
     if (_hasAllSignalsPassed(_currentSnapshot) &&
-        _currentSnapshot.overallScore >= 0.58) {
+        _currentSnapshot.overallScore >= _minimumOverallPassScore) {
       _currentStatus = LivenessStatus.passed;
       _emitStatus();
     } else {
       _currentStatus = LivenessStatus.failed;
       _emitStatus();
     }
+  }
+
+  List<String> _collectBlockingChecks() {
+    final failed = List<String>.from(_failedChecks);
+    if (_blinkCount < _minBlinkCountForPass &&
+        !failed.contains('eye_activity_present')) {
+      failed.add('eye_activity_present');
+    }
+    if (_depthRiskHistory.length < _minDepthFramesForPass &&
+        !failed.contains('anti_spoof_ok')) {
+      failed.add('anti_spoof_ok');
+    }
+    if (sessionElapsed < _minStableSessionDuration &&
+        !failed.contains('session_duration_min')) {
+      failed.add('session_duration_min');
+    }
+    if (_currentSnapshot.overallScore < _minimumOverallPassScore &&
+        !failed.contains('overall_passive_score')) {
+      failed.add('overall_passive_score');
+    }
+    return failed;
+  }
+
+  String _checkLabelAr(String key) {
+    switch (key) {
+      case 'face_tracking_stable':
+        return 'ثبات وتموضع الوجه';
+      case 'pose_within_range':
+        return 'وضعية الوجه';
+      case 'eye_activity_present':
+        return 'حركة العين والرمش';
+      case 'respiration_pattern_present':
+        return 'النمط الحيوي الطبيعي';
+      case 'skin_texture_natural':
+        return 'نسيج الوجه';
+      case 'landmark_coverage_ok':
+        return 'وضوح المعالم';
+      case 'anti_spoof_ok':
+        return 'مقاومة الانتحال';
+      case 'session_duration_min':
+        return 'زمن الفحص';
+      case 'overall_passive_score':
+        return 'النتيجة العامة';
+      default:
+        return key;
+    }
+  }
+
+  String _buildDetailedFailureMessageAr({
+    required double spoofRisk,
+    bool includeSpoofWarning = false,
+  }) {
+    final failed = _collectBlockingChecks();
+    final names =
+        failed.map(_checkLabelAr).where((v) => v.trim().isNotEmpty).toSet().toList();
+    final top = names.take(3).join('، ');
+    if (includeSpoofWarning || spoofRisk >= _spoofRejectThreshold) {
+      return 'تم رفض الفحص لأن النظام اكتشف نمطاً قريباً من صورة أو فيديو أو شاشة. '
+          'المؤشرات الأضعف: ${top.isEmpty ? "مقاومة الانتحال" : top}. '
+          'استخدم الوجه الحقيقي مباشرة أمام الكاميرا، وتجنب أي جهاز آخر أو صورة مطبوعة.';
+    }
+    return 'لم تكتمل جميع مؤشرات الفحص الحيوي بشكل آمن. '
+        '${top.isEmpty ? "" : "المؤشرات التي تحتاج تحسين: $top. "}'
+        'استمر لثوانٍ قليلة إضافية مع وجه حقيقي داخل الإطار، وارمش بشكل طبيعي، وابتعد عن الصور أو الفيديو.';
   }
 
   LivenessResult getFinalResult() {
@@ -749,10 +850,12 @@ class LivenessDetectionService {
     if (_currentStatus == LivenessStatus.spoofDetected) {
       return LivenessResult.failed(
         status: LivenessStatus.spoofDetected,
-        message:
-            'تم رفض المصادقة لأن النظام اكتشف نمطاً قريباً من صورة أو شاشة أو انتحال.',
+        message: _buildDetailedFailureMessageAr(
+          spoofRisk: spoofRisk,
+          includeSpoofWarning: true,
+        ),
         spoofRisk: spoofRisk,
-        failedChecks: List.unmodifiable(_failedChecks),
+        failedChecks: List.unmodifiable(_collectBlockingChecks()),
         passedChecks: List.unmodifiable(_passedChecks),
       );
     }
@@ -761,16 +864,15 @@ class LivenessDetectionService {
         status: LivenessStatus.timeout,
         message: 'انتهت مهلة الفحص الحيوي. حاول مرة أخرى.',
         spoofRisk: spoofRisk,
-        failedChecks: List.unmodifiable(_failedChecks),
+        failedChecks: List.unmodifiable(_collectBlockingChecks()),
         passedChecks: List.unmodifiable(_passedChecks),
       );
     }
     return LivenessResult.failed(
       status: LivenessStatus.failed,
-      message:
-          'لم تكتمل جميع مؤشرات التحقق الحيوي المطلوبة بعد. حاول مرة أخرى حتى تجتاز التموضع والوضعية والعينين والتنفس والنسيج والمعالم ومقاومة الانتحال.',
+      message: _buildDetailedFailureMessageAr(spoofRisk: spoofRisk),
       spoofRisk: spoofRisk,
-      failedChecks: List.unmodifiable(_failedChecks),
+      failedChecks: List.unmodifiable(_collectBlockingChecks()),
       passedChecks: List.unmodifiable(_passedChecks),
     );
   }
@@ -1075,12 +1177,12 @@ class LivenessDetectionService {
     final skv = m['skinVariance'] ?? 0.5;
     final lig = m['lightingGradient'] ?? 0.5;
     final hfe = m['highFreqEnergy'] ?? 0.5;
-    return ((sym * 0.22) +
+    return ((sym * 0.20) +
             (esm * 0.18) +
-            (cbf * 0.14) +
+            (cbf * 0.18) +
             (skv * 0.18) +
-            ((1.0 - lig) * 0.14) +
-            ((1.0 - hfe) * 0.14))
+            ((1.0 - lig) * 0.10) +
+            ((1.0 - hfe) * 0.16))
         .clamp(0.0, 1.0);
   }
 
