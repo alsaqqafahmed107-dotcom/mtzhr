@@ -164,8 +164,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         .languageCode;
     _statusMessage = Translations.getText('face_point_to_camera', lang);
     _instructionMessage = lang == 'ar'
-        ? 'لا توجد تحديات يدوية. فقط أبقِ وجهك داخل الإطار واترك النظام يحلل الحياة والهوية تلقائياً.'
-        : 'No manual challenges. Keep your face inside the frame and let the system analyze liveness automatically.';
+        ? 'سيطلب منك النظام تحدياً حياً عشوائياً قصيراً مثل الرمش أو تحريك الرأس. هذا لمنع الاحتيال بالصورة أو الفيديو.'
+        : 'The system will ask for a short random live challenge such as a blink or head turn to block photo and replay attacks.';
     _challengeMessage = lang == 'ar'
         ? 'جاري فحص التموضع وحيوية الوجه...'
         : 'Analyzing face position and passive liveness...';
@@ -763,6 +763,14 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           : 'The capture was rejected because it looked like a photo, video, or screen replay. Use a real face directly in front of the camera and keep other devices out of view.';
     }
 
+    if (lower.contains('التحدي العشوائي') ||
+        lower.contains('active_challenge') ||
+        lower.contains('challenge required')) {
+      return _lang() == 'ar'
+          ? 'تم رفض التحقق لأن التحدي الحي المباشر لم يكتمل. اتبع التعليمات التي تظهر على الشاشة مثل الرمش أو تحريك الرأس في اللحظة المطلوبة.'
+          : 'Verification was rejected because the live challenge did not complete. Follow the on-screen instruction, such as blinking or turning your head at the requested moment.';
+    }
+
     if (lower.contains('نسيج الوجه') ||
         lower.contains('skin texture') ||
         lower.contains('texture')) {
@@ -1123,6 +1131,50 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       });
       _handleLivenessStatusChange(status);
     });
+    _livenessService.challengeStream.listen((challenge) {
+      if (!mounted) return;
+      setState(() {
+        _challengeMessage = _describeLivenessChallenge(challenge);
+      });
+      // #region debug-point A:liveness-active-challenge
+      unawaited(_reportDebugEvent(
+        'A',
+        'face_verification_screen_mobile.dart:_setupLivenessListeners:challenge',
+        'Issued active liveness challenge',
+        data: {
+          'challengeType': challenge.type.name,
+          'timeLimitSec': challenge.timeLimit.inSeconds,
+          'completedCount': _livenessService.completedChallengeCount,
+          'requiredCount': _livenessService.requiredChallenges,
+        },
+      ));
+      // #endregion
+    });
+  }
+
+  String _describeLivenessChallenge(LivenessChallenge challenge) {
+    final remaining = challenge.timeLimit.inSeconds;
+    switch (challenge.type) {
+      case LivenessChallengeType.blink:
+        return _lang() == 'ar'
+            ? 'تحدي مباشر: ارمش مرة واحدة الآن خلال $remaining ثوانٍ.'
+            : 'Live challenge: blink once now within $remaining seconds.';
+      case LivenessChallengeType.headTiltLeft:
+        return _lang() == 'ar'
+            ? 'تحدي مباشر: حرّك رأسك قليلاً إلى اليسار خلال $remaining ثوانٍ.'
+            : 'Live challenge: turn your head slightly to the left within $remaining seconds.';
+      case LivenessChallengeType.headTiltRight:
+        return _lang() == 'ar'
+            ? 'تحدي مباشر: حرّك رأسك قليلاً إلى اليمين خلال $remaining ثوانٍ.'
+            : 'Live challenge: turn your head slightly to the right within $remaining seconds.';
+      case LivenessChallengeType.smile:
+      case LivenessChallengeType.mouthOpen:
+      case LivenessChallengeType.headTiltUp:
+      case LivenessChallengeType.headTiltDown:
+        return _lang() == 'ar'
+            ? 'جاري تنفيذ التحدي الحيوي المباشر...'
+            : 'Live biometric challenge in progress...';
+    }
   }
 
   void _handleLivenessStatusChange(LivenessStatus status) {
@@ -1159,7 +1211,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         _statusMessage = _lang() == 'ar'
             ? 'جاري فحص الحياة السلبي وتتبع الوجه'
             : 'Passive liveness scan in progress';
-        _challengeMessage = _getFacePresenceGuidance(_currentFaceCount);
+        _challengeMessage = _livenessService.currentChallenge != null
+            ? _describeLivenessChallenge(_livenessService.currentChallenge!)
+            : _getFacePresenceGuidance(_currentFaceCount);
         break;
       case LivenessStatus.analyzing:
         _borderColor = Colors.purple;
@@ -1747,6 +1801,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           'passedChecks': livenessResult.passedChecks,
           'failedChecks': livenessResult.failedChecks,
           'completedChallengeCount': _livenessService.completedChallengeCount,
+          'requiredChallengeCount': _livenessService.requiredChallenges,
+          'completedChallengeTypes': _livenessService.completedChallenges
+              .map((c) => c.name)
+              .toList(),
           'sessionDurationSec':
               DateTime.now().difference(_sessionStartTime).inSeconds,
           'trackingScore': _displaySnapshot.trackingScore,
@@ -1970,6 +2028,12 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         'spoofRisk': livenessResult.spoofRisk,
         'passedChecks': livenessResult.passedChecks,
         'challengesCompleted': _livenessService.completedChallengeCount,
+        'activeChallenge': {
+          'requiredCount': _livenessService.requiredChallenges,
+          'completedCount': _livenessService.completedChallengeCount,
+          'completedTypes':
+              _livenessService.completedChallenges.map((c) => c.name).toList(),
+        },
         'passiveAnalysis': {
           'trackingScore': snapshotForVerification.trackingScore,
           'poseScore': snapshotForVerification.poseScore,

@@ -197,10 +197,12 @@ class LivenessDetectionService {
   static const int _minFramesForAnalysis = 16;
   static const int _maxFramesBuffer = 72;
   static const int _requiredSignals = _totalSignals;
+  static const int _defaultRequiredActiveChallenges = 2;
   static const double _blinkThresholdLow = 0.33;
   static const double _blinkThresholdHigh = 0.72;
   static const double _maxYawDegrees = 30.0;
   static const double _maxPitchDegrees = 25.0;
+  static const double _challengeYawDeltaThreshold = 10.0;
   static const double _spoofRejectThreshold = 0.60;
   static const double _antiSpoofPassThreshold = 0.62;
   static const double _texturePassThreshold = 0.52;
@@ -216,6 +218,7 @@ class LivenessDetectionService {
   final List<String> _completedSignalKeys = [];
   final List<String> _passedChecks = [];
   final List<String> _failedChecks = [];
+  final Random _random = Random();
 
   DateTime? _sessionStart;
   final Duration _maxSessionDuration = const Duration(seconds: 30);
@@ -226,6 +229,11 @@ class LivenessDetectionService {
   bool _wasBlinking = false;
   int _blinkCount = 0;
   double _lastDepthSpoofRisk = 0.0;
+  List<LivenessChallengeType> _challengePlan = const [];
+  final List<LivenessChallengeType> _completedActiveChallenges = [];
+  LivenessChallenge? _activeChallenge;
+  int _challengeStartBlinkCount = 0;
+  double _challengeStartYaw = 0.0;
 
   final StreamController<LivenessStatus> _statusController =
       StreamController<LivenessStatus>.broadcast();
@@ -239,11 +247,11 @@ class LivenessDetectionService {
   Stream<double> get progressStream => _progressController.stream;
 
   LivenessStatus get currentStatus => _currentStatus;
-  LivenessChallenge? get currentChallenge => null;
+  LivenessChallenge? get currentChallenge => _activeChallenge;
   List<LivenessChallengeType> get completedChallenges =>
-      LivenessChallengeType.values.take(_completedSignalKeys.length).toList();
-  int get requiredChallenges => _requiredSignals;
-  int get completedChallengeCount => _completedSignalKeys.length;
+      List.unmodifiable(_completedActiveChallenges);
+  int get requiredChallenges => _challengePlan.length;
+  int get completedChallengeCount => _completedActiveChallenges.length;
   double get lastDepthSpoofRisk => _lastDepthSpoofRisk;
   int get depthFrameCount => _depthRiskHistory.length;
   double get averageDepthSpoofRisk {
@@ -270,8 +278,99 @@ class LivenessDetectionService {
     _wasBlinking = false;
     _blinkCount = 0;
     _lastDepthSpoofRisk = 0.0;
+    _completedActiveChallenges.clear();
+    _activeChallenge = null;
+    _challengeStartBlinkCount = 0;
+    _challengeStartYaw = 0.0;
+    _challengePlan = _buildChallengePlan(requiredChallenges);
     _emitStatus();
     _emitProgress();
+  }
+
+  List<LivenessChallengeType> _buildChallengePlan(int requiredChallenges) {
+    final desired = requiredChallenges > 0
+        ? requiredChallenges.clamp(1, _defaultRequiredActiveChallenges)
+        : _defaultRequiredActiveChallenges;
+    final headTurn = _random.nextBool()
+        ? LivenessChallengeType.headTiltLeft
+        : LivenessChallengeType.headTiltRight;
+    final plan = <LivenessChallengeType>[
+      LivenessChallengeType.blink,
+      headTurn,
+    ];
+    plan.shuffle(_random);
+    return plan.take(desired).toList(growable: false);
+  }
+
+  void _emitChallenge(LivenessChallenge challenge) {
+    if (!_challengeController.isClosed) {
+      _challengeController.add(challenge);
+    }
+  }
+
+  void _startNextChallenge(Face face) {
+    if (_completedActiveChallenges.length >= _challengePlan.length) {
+      _activeChallenge = null;
+      return;
+    }
+
+    final type = _challengePlan[_completedActiveChallenges.length];
+    _activeChallenge = LivenessChallenge(
+      type: type,
+      startTime: DateTime.now(),
+      timeLimit: const Duration(seconds: 7),
+    );
+    _challengeStartBlinkCount = _blinkCount;
+    _challengeStartYaw = face.headEulerAngleY ?? 0.0;
+    _emitChallenge(_activeChallenge!);
+  }
+
+  bool _isActiveChallengeSatisfied(Face face) {
+    final challenge = _activeChallenge;
+    if (challenge == null) return true;
+
+    switch (challenge.type) {
+      case LivenessChallengeType.blink:
+        return _blinkCount > _challengeStartBlinkCount;
+      case LivenessChallengeType.headTiltLeft:
+        return ((face.headEulerAngleY ?? 0.0) - _challengeStartYaw) <=
+            -_challengeYawDeltaThreshold;
+      case LivenessChallengeType.headTiltRight:
+        return ((face.headEulerAngleY ?? 0.0) - _challengeStartYaw) >=
+            _challengeYawDeltaThreshold;
+      case LivenessChallengeType.smile:
+      case LivenessChallengeType.mouthOpen:
+      case LivenessChallengeType.headTiltUp:
+      case LivenessChallengeType.headTiltDown:
+        return false;
+    }
+  }
+
+  void _advanceActiveChallenge(Face face) {
+    if (_challengePlan.isEmpty) return;
+
+    if (_activeChallenge == null) {
+      _startNextChallenge(face);
+      return;
+    }
+
+    final challenge = _activeChallenge!;
+    if (DateTime.now().difference(challenge.startTime) > challenge.timeLimit) {
+      challenge.failed = true;
+      _currentStatus = LivenessStatus.failed;
+      _emitStatus();
+      return;
+    }
+
+    if (_isActiveChallengeSatisfied(face)) {
+      challenge.completed = true;
+      _completedActiveChallenges.add(challenge.type);
+      if (_completedActiveChallenges.length >= _challengePlan.length) {
+        _activeChallenge = null;
+      } else {
+        _startNextChallenge(face);
+      }
+    }
   }
 
   void _emitStatus() {
@@ -341,6 +440,7 @@ class LivenessDetectionService {
       _emitStatus();
     }
 
+    _advanceActiveChallenge(face);
     _refreshPassiveSnapshot();
 
     if (_currentSnapshot.antiSpoofScore < 0.38 &&
@@ -536,6 +636,7 @@ class LivenessDetectionService {
         snapshot.texturePassed &&
         snapshot.landmarkPassed &&
         snapshot.antiSpoofPassed &&
+        _completedActiveChallenges.length >= _challengePlan.length &&
         _blinkCount >= _minBlinkCountForPass &&
         _depthRiskHistory.length >= _minDepthFramesForPass &&
         averageDepthSpoofRisk <= _maxAverageDepthRiskForPass &&
@@ -784,6 +885,10 @@ class LivenessDetectionService {
         !failed.contains('anti_spoof_ok')) {
       failed.add('anti_spoof_ok');
     }
+    if (_completedActiveChallenges.length < _challengePlan.length &&
+        !failed.contains('active_challenge_incomplete')) {
+      failed.add('active_challenge_incomplete');
+    }
     if (sessionElapsed < _minStableSessionDuration &&
         !failed.contains('session_duration_min')) {
       failed.add('session_duration_min');
@@ -811,6 +916,8 @@ class LivenessDetectionService {
         return 'وضوح المعالم';
       case 'anti_spoof_ok':
         return 'مقاومة الانتحال';
+      case 'active_challenge_incomplete':
+        return 'التحدي العشوائي المباشر';
       case 'session_duration_min':
         return 'زمن الفحص';
       case 'overall_passive_score':
