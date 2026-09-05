@@ -114,6 +114,13 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   bool get _hasReadyIosStillImage =>
       _lastProactiveCapturedJpg != null && _lastProactiveCapturedFace != null;
 
+  ({Uint8List bytes, Face face})? _getReadyProactiveCapture() {
+    final bytes = _lastProactiveCapturedJpg;
+    final face = _lastProactiveCapturedFace;
+    if (bytes == null || face == null) return null;
+    return (bytes: bytes, face: face);
+  }
+
   // كاشف الوجه للكشف والتحقق من صحة الوضع
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
@@ -297,7 +304,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   }
 
   Future<void> _runProactiveCaptureOnce() async {
-    if (_controller == null || !_controller!.value.isInitialized) return;
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return;
     final XFile? img = await _tryTakePictureOrNull(timeoutMs: 2200);
     if (img == null) return;
     final bytes = await File(img.path)
@@ -323,8 +331,10 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
         (_currentDetectedFace != null || _lastValidFace != null)) {
       // على iPhone قد لا يلتقط ML Kit الوجه من الصورة الثابتة الأخيرة
       // رغم أن البث الحي أكد وجود وجه صالح قبلها مباشرة.
+      final fallbackFace = _currentDetectedFace ?? _lastValidFace;
+      if (fallbackFace == null) return;
       _lastProactiveCapturedJpg = bytes;
-      _lastProactiveCapturedFace = _currentDetectedFace ?? _lastValidFace!;
+      _lastProactiveCapturedFace = fallbackFace;
       _lastProactiveCapturedAt = DateTime.now();
     }
   }
@@ -380,10 +390,8 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   Future<Uint8List> _prepareImageBytesForServerUpload(
     Uint8List originalBytes, {
     required String purpose,
+    Face? primaryFace,
   }) async {
-    if (!Platform.isIOS) {
-      return originalBytes;
-    }
 
     try {
       final decoded = img.decodeImage(originalBytes);
@@ -401,6 +409,39 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       }
 
       var normalized = img.bakeOrientation(decoded);
+      final originalWidth = normalized.width;
+      final originalHeight = normalized.height;
+
+      bool cropApplied = false;
+      if (primaryFace != null) {
+        try {
+          final bbox = primaryFace.boundingBox;
+          final padX = bbox.width * 0.35;
+          final padTop = bbox.height * 0.42;
+          final padBottom = bbox.height * 0.30;
+          final cropX = (bbox.left - padX).floor().clamp(0, normalized.width - 1);
+          final cropY = (bbox.top - padTop).floor().clamp(0, normalized.height - 1);
+          final cropRight =
+              (bbox.right + padX).ceil().clamp(cropX + 1, normalized.width);
+          final cropBottom = (bbox.bottom + padBottom)
+              .ceil()
+              .clamp(cropY + 1, normalized.height);
+          final cropW = cropRight - cropX;
+          final cropH = cropBottom - cropY;
+
+          if (cropW >= 120 && cropH >= 140) {
+            normalized = img.copyCrop(
+              normalized,
+              x: cropX,
+              y: cropY,
+              width: cropW,
+              height: cropH,
+            );
+            cropApplied = true;
+          }
+        } catch (_) {}
+      }
+
       final isFrontCamera =
           _controller?.description.lensDirection == CameraLensDirection.front;
       if (isFrontCamera) {
@@ -418,9 +459,12 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
           'purpose': purpose,
           'originalKb': originalBytes.length ~/ 1024,
           'normalizedKb': encoded.length ~/ 1024,
+          'cropApplied': cropApplied,
           'isFrontCamera': isFrontCamera,
           'width': normalized.width,
           'height': normalized.height,
+          'originalWidth': originalWidth,
+          'originalHeight': originalHeight,
         },
       ));
       return encoded;
@@ -481,6 +525,25 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
 
   String _tParams(String key, Map<String, String> params) =>
       Translations.getTextWithParams(key, _lang(), params);
+
+  String _friendlyCameraErrorMessage(Object error) {
+    final raw = error.toString().trim();
+    final lower = raw.toLowerCase();
+
+    if (lower.contains('null check operator used on a null value')) {
+      return _lang() == 'ar'
+          ? 'تعذر إكمال تشغيل الكاميرا لأن مرجعاً داخلياً أصبح غير جاهز مؤقتاً أثناء التسجيل. تمت الآن حماية شاشة التسجيل من هذا التعارض، ويمكنك إعادة المحاولة بدون إغلاق الصفحة.'
+          : 'The camera could not continue because an internal reference became temporarily unavailable during enrollment. The screen now handles this safely, and you can retry without leaving the page.';
+    }
+
+    if (lower.contains('camera') && lower.contains('disposed')) {
+      return _lang() == 'ar'
+          ? 'تمت إعادة تهيئة الكاميرا أو إغلاقها مؤقتاً أثناء تسجيل الوجه. أعد المحاولة بعد ثبات الوجه داخل الإطار.'
+          : 'The camera was reinitialized or temporarily closed during face enrollment. Try again while keeping the face steady inside the frame.';
+    }
+
+    return _tParams('camera_start_error_with_error', {'error': raw});
+  }
 
   String _formatDialogMessage(String message, {String? rawDetails}) {
     final normalizedMessage = message.trim();
@@ -629,11 +692,11 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
         await _startFrameStreaming();
       }
     } catch (e) {
+      final friendlyMessage = _friendlyCameraErrorMessage(e);
       if (mounted) {
         setState(() {
           _isInitializing = false;
-          _statusMessage = _tParams(
-              'camera_start_error_with_error', {'error': e.toString()});
+          _statusMessage = friendlyMessage;
           _borderColor = Colors.red;
           _poseHintMessage = _lang() == 'ar'
               ? 'تم إيقاف المتابعة حتى تتمكن من قراءة سبب المشكلة.'
@@ -642,10 +705,7 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       }
       _showFailureDialog(
         title: _lang() == 'ar' ? 'خطأ في تشغيل الكاميرا' : 'Camera Error',
-        message: _tParams(
-          'camera_start_error_with_error',
-          {'error': e.toString()},
-        ),
+        message: friendlyMessage,
         rawDetails: e.toString(),
       );
     }
@@ -1062,10 +1122,11 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
   }
 
   Future<void> _captureAndSaveEmployeeFace() async {
+    final initialController = _controller;
     if (_isProcessing ||
         _isSavingToServer ||
-        _controller == null ||
-        !_controller!.value.isInitialized) return;
+        initialController == null ||
+        !initialController.value.isInitialized) return;
 
     final perfTrace = DateTime.now();
     String tid = 'T${perfTrace.millisecondsSinceEpoch.toRadixString(36)}';
@@ -1096,9 +1157,10 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       phase = 'CAPTURE_IMAGE';
       String fallbackUsed = 'NONE';
       try {
-        if (Platform.isIOS && _hasReadyIosStillImage) {
-          finalImageBytes = _lastProactiveCapturedJpg!;
-          finalFace = _lastProactiveCapturedFace!;
+        final proactiveCapture = _getReadyProactiveCapture();
+        if (Platform.isIOS && proactiveCapture != null) {
+          finalImageBytes = proactiveCapture.bytes;
+          finalFace = proactiveCapture.face;
           fallbackUsed = 'IOS_PROACTIVE_JPG_PRIMARY';
           if (kDebugMode) {
             print(
@@ -1146,8 +1208,15 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
               print('💾 [$tid] (${t2}ms) PHASE 1A OK: takePicture() مباشر');
           } else if (Platform.isIOS &&
               (_currentDetectedFace != null || _lastValidFace != null)) {
+            final fallbackFace = _currentDetectedFace ?? _lastValidFace;
+            if (fallbackFace == null) {
+              failReason = 'IOS_LIVE_FACE_FALLBACK_NULL';
+              throw StateError(_lang() == 'ar'
+                  ? 'تم فقدان مرجع الوجه أثناء التقاط صورة التسجيل. أعد المحاولة مع إبقاء الوجه ثابتاً داخل الإطار.'
+                  : 'The live face reference was lost during enrollment capture. Try again while keeping the face steady inside the frame.');
+            }
             finalImageBytes = bytesXFile;
-            finalFace = _currentDetectedFace ?? _lastValidFace!;
+            finalFace = fallbackFace;
             fallbackUsed = 'IOS_LIVE_FACE_FALLBACK';
             if (kDebugMode) {
               print(
@@ -1160,13 +1229,13 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
         }
       } catch (capErr) {
         if (kDebugMode) print('💾 [$tid] ⚠️ المرحلة 1A فشلت: $capErr');
-        if (_hasReadyIosStillImage) {
-          finalImageBytes = _lastProactiveCapturedJpg!;
-          finalFace = _lastProactiveCapturedFace!;
+        final proactiveCapture = _getReadyProactiveCapture();
+        if (proactiveCapture != null) {
+          finalImageBytes = proactiveCapture.bytes;
+          finalFace = proactiveCapture.face;
           fallbackUsed = 'PROACTIVE_JPG';
           if (kDebugMode)
-            print(
-                '💾 [$tid] PHASE 1B OK: Fallback → JPG استباقي (${finalImageBytes!.length ~/ 1024}KB)');
+            print('💾 [$tid] PHASE 1B OK: Fallback → JPG استباقي (${finalImageBytes.length ~/ 1024}KB)');
         } else {
           throw StateError(_lang() == 'ar'
               ? 'تعذر الحصول على صورة وجه صالحة من الكاميرا. أعد المحاولة مع إبقاء الوجه ثابتاً داخل الإطار.'
@@ -1181,12 +1250,12 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       // المرحلة 2: فحص زوايا الرأس والعيون (التحقق النهائي)
       // ----------------------------------------------------
       phase = 'VALIDATE_POSE';
-      double headY = finalFace!.headEulerAngleY ?? 0;
-      double headX = finalFace!.headEulerAngleX ?? 0;
+      double headY = finalFace.headEulerAngleY ?? 0;
+      double headX = finalFace.headEulerAngleX ?? 0;
       if (headY.abs() > 25 || headX.abs() > 25) {
         throw StateError(_t('look_straight_no_tilt'));
       }
-      if (!_passesEyeOpennessForEnrollment(finalFace!)) {
+      if (!_passesEyeOpennessForEnrollment(finalFace)) {
         throw StateError(_t('open_eyes_clearly_for_photo'));
       }
       final t2 = DateTime.now().difference(perfTrace).inMilliseconds;
@@ -1200,8 +1269,9 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
       // ----------------------------------------------------
       phase = 'BASE64_ENCODE';
       final uploadBytes = await _prepareImageBytesForServerUpload(
-        finalImageBytes!,
+        finalImageBytes,
         purpose: 'enrollment',
+        primaryFace: finalFace,
       );
       final base64Image = base64Encode(uploadBytes);
       final metadata = {
@@ -1214,7 +1284,7 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
         'consentApproved': true,
         'retentionYears': 5,
         'flowVersion': 'ENROLL_V2',
-        'captureBytesKb': finalImageBytes!.length ~/ 1024,
+        'captureBytesKb': finalImageBytes.length ~/ 1024,
         'uploadBytesKb': uploadBytes.length ~/ 1024,
       };
       final t3 = DateTime.now().difference(perfTrace).inMilliseconds;
@@ -1393,6 +1463,12 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
               'فشل الحفظ لأن الخادم اعتبر البيانات المرسلة أكبر من سعة الحقل في قاعدة البيانات. '
               'غالباً المشكلة من الخادم أو من نسخة API قديمة، وليست من وجهك أو الكاميرا.';
           shouldAutoReset = false;
+        } else if (msgLower.contains('multiple_faces_detected') ||
+            msgLower.contains('أكثر من وجه') ||
+            msgLower.contains('more than one face')) {
+          msg =
+              'تم اكتشاف أكثر من وجه داخل صورة التسجيل. أبعد أي شاشة أو شخص آخر من الخلفية، واجعل وجه موظف واحد فقط داخل الإطار ثم أعد المحاولة.';
+          shouldAutoReset = false;
         } else if (msgLower.contains('database') || msgLower.contains('sql')) {
           msg =
               'فشل الحفظ بسبب مشكلة في قاعدة البيانات على الخادم. الرسالة ستبقى ظاهرة حتى تتمكن من قراءتها ثم اضغط إعادة المحاولة.';
@@ -1478,6 +1554,10 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
             errLower.contains('socket') ||
             errLower.contains('network')) {
           friendlyMsg = 'تعذر الاتصال بالسيرفر. تحقق من اتصال الإنترنت.';
+        } else if (errLower.contains('null check operator used on a null value')) {
+          friendlyMsg =
+              'تم فقدان مرجع الكاميرا أو صورة الوجه مؤقتاً أثناء التسجيل. أعد المحاولة مع إبقاء الوجه ثابتاً داخل الإطار.';
+          shouldAutoReset = false;
         } else if (errLower
                 .contains('string or binary data would be truncated') ||
             errLower.contains('binary or string data would be truncated') ||
@@ -1485,6 +1565,12 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
           friendlyMsg =
               'الخادم رفض الحفظ لأن حجم البيانات النصية المرسلة أكبر من سعة الحقل في قاعدة البيانات. '
               'هذا خطأ من جهة الـ API أو قاعدة البيانات، وليس من طريقة وقوفك أمام الكاميرا.';
+          shouldAutoReset = false;
+        } else if (errLower.contains('multiple_faces_detected') ||
+            errLower.contains('أكثر من وجه') ||
+            errLower.contains('more than one face')) {
+          friendlyMsg =
+              'تم اكتشاف أكثر من وجه داخل صورة التسجيل. أبعد أي شاشة أو شخص آخر من الخلفية، واجعل وجه موظف واحد فقط داخل الإطار ثم أعد المحاولة.';
           shouldAutoReset = false;
         } else {
           friendlyMsg = _tParams('error_with_error', {'error': rawErr});
@@ -1574,7 +1660,11 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
                     child: ClipRect(
                       child: LayoutBuilder(
                         builder: (context, constraints) {
-                          final controller = _controller!;
+                          final controller = _controller;
+                          if (controller == null ||
+                              !controller.value.isInitialized) {
+                            return const ColoredBox(color: Colors.black);
+                          }
                           final previewSize = controller.value.previewSize;
                           final screenAspect =
                               constraints.maxWidth / constraints.maxHeight;

@@ -33,8 +33,9 @@ class FaceVerificationScreen extends StatefulWidget {
 
 class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     with WidgetsBindingObserver {
-  static const bool _enableRemoteDebugTelemetry = false;
-  static const String _debugEnvPath = 'd:\\new\\.dbg\\ios-face-save-verify.env';
+  static const bool _enableRemoteDebugTelemetry = true;
+  static const String _debugEnvPath =
+      'd:\\new\\.dbg\\attendance-spoof-location.env';
   String? _debugServerUrl;
   String? _debugSessionId;
   // #region debug-point A:reporting-helper
@@ -61,7 +62,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         } catch (_) {}
       }
       final url = _debugServerUrl ?? 'http://192.168.1.163:7777/event';
-      final session = _debugSessionId ?? 'ios-face-save-verify';
+      final session = _debugSessionId ?? 'attendance-spoof-location';
       final client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 2);
       final req = await client.postUrl(
@@ -242,7 +243,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       _faceMatched ||
       _closeHandled ||
       _isVerifyingOnServer ||
-      _verificationCaptureCompleted;
+      _verificationCaptureCompleted ||
+      (_verificationStartRequested &&
+          _lastProactiveCapturedJpg != null &&
+          _lastProactiveCapturedFace != null);
 
   CameraController _buildCameraController(
     CameraDescription camera, {
@@ -1665,10 +1669,12 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   Future<void> _captureAndVerifyWithLiveness() async {
     final controller = _controller;
+    final bool hasFallbackCapture =
+        _lastProactiveCapturedJpg != null && _lastProactiveCapturedFace != null;
     if (!mounted ||
         _isVerifyingOnServer ||
-        controller == null ||
-        !controller.value.isInitialized) {
+        ((controller == null || !controller.value.isInitialized) &&
+            !hasFallbackCapture)) {
       return;
     }
 
@@ -1696,6 +1702,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       data: {
         'controllerInitialized': _controller?.value.isInitialized ?? false,
         'isStreamingImages': _controller?.value.isStreamingImages ?? false,
+        'hasFallbackCapture': hasFallbackCapture,
         'livenessStatus': _livenessStatus.name,
       },
     ));
@@ -1726,10 +1733,54 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       // 🔍 المرحلة 1: فحص نتيجة Liveness
       phase = 'CHECK_LIVENESS';
       final livenessResult = _livenessService.getFinalResult();
+      // #region debug-point A:liveness-final-result
+      unawaited(_reportDebugEvent(
+        'A',
+        'face_verification_screen_mobile.dart:_captureAndVerifyWithLiveness:liveness-result',
+        'Client finalized passive liveness result before server verification',
+        data: {
+          'status': livenessResult.status.name,
+          'passed': livenessResult.passed,
+          'message': livenessResult.message,
+          'livenessScore': livenessResult.livenessScore,
+          'spoofRisk': livenessResult.spoofRisk,
+          'passedChecks': livenessResult.passedChecks,
+          'failedChecks': livenessResult.failedChecks,
+          'completedChallengeCount': _livenessService.completedChallengeCount,
+          'sessionDurationSec':
+              DateTime.now().difference(_sessionStartTime).inSeconds,
+          'trackingScore': _displaySnapshot.trackingScore,
+          'poseScore': _displaySnapshot.poseScore,
+          'eyeActivityScore': _displaySnapshot.eyeActivityScore,
+          'breathingScore': _displaySnapshot.breathingScore,
+          'textureScore': _displaySnapshot.textureScore,
+          'landmarkScore': _displaySnapshot.landmarkScore,
+          'antiSpoofScore': _displaySnapshot.antiSpoofScore,
+          'overallScore': _displaySnapshot.overallScore,
+          'completedSignals': _displaySnapshot.completedSignals,
+          'requiredSignals': _displaySnapshot.requiredSignals,
+        },
+      ));
+      // #endregion
       if (!livenessResult.passed) {
         if (kDebugMode)
           print(
               '⚡ [VERIFY-PERF] ❌ نتيجة Liveness غير صالحة رغم الحالة passed (تناقض داخلي)');
+        // #region debug-point A:liveness-blocked-locally
+        unawaited(_reportDebugEvent(
+          'A',
+          'face_verification_screen_mobile.dart:_captureAndVerifyWithLiveness:liveness-blocked',
+          'Client blocked verification because passive liveness failed locally',
+          data: {
+            'status': livenessResult.status.name,
+            'message': livenessResult.message,
+            'livenessScore': livenessResult.livenessScore,
+            'spoofRisk': livenessResult.spoofRisk,
+            'passedChecks': livenessResult.passedChecks,
+            'failedChecks': livenessResult.failedChecks,
+          },
+        ));
+        // #endregion
         _handleLivenessResultFailure(livenessResult);
         return;
       }
@@ -1757,6 +1808,15 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           if (kDebugMode) {
             print(
                 '⚡ [VERIFY-PERF] استخدام JPEG استباقية كأساس على iPhone (${finalImageBytes!.length ~/ 1024}KB)');
+          }
+        } else if ((controller == null || !controller.value.isInitialized) &&
+            hasFallbackCapture) {
+          finalImageBytes = _lastProactiveCapturedJpg!;
+          finalFace = _lastProactiveCapturedFace!;
+          fallbackUsed = 'PROACTIVE_JPG_RECOVERY';
+          if (kDebugMode) {
+            print(
+                '⚡ [VERIFY-PERF] الكاميرا لم تعد جاهزة لكن لدينا JPEG صالحة → متابعة التحقق بدون إعادة تهيئة الكاميرا');
           }
         } else {
           final swCap = Stopwatch()..start();
@@ -2230,6 +2290,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
       if (!mounted) return;
       final controller = _controller;
+      final bool hasFallbackCapture =
+          _lastProactiveCapturedJpg != null && _lastProactiveCapturedFace != null;
       final String reason1 =
           _isVerifyingOnServer ? "_isVerifyingOnServer=true" : "✓";
       final String reason2 = controller == null ? "controller=NULL" : "✓";
@@ -2237,8 +2299,12 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           (controller != null && !controller.value.isInitialized)
               ? "controller not init"
               : "✓";
+      final String reason4 =
+          hasFallbackCapture ? "fallback-ready" : "no-fallback";
       final String reasonsFailed =
-          [reason1, reason2, reason3].where((e) => e != "✓").join(", ");
+          [reason1, reason2, reason3, reason4]
+              .where((e) => e != "✓" && e != "fallback-ready")
+              .join(", ");
       if (kDebugMode) {
         print(
             '🔄 [VERIFY-START] محاولة $attempt/$maxAttempts: الفشل المحتمل=[$reasonsFailed]');
@@ -2252,6 +2318,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           'attempt': attempt,
           'maxAttempts': maxAttempts,
           'reasonsFailed': reasonsFailed,
+          'hasFallbackCapture': hasFallbackCapture,
           'isVerifyingOnServer': _isVerifyingOnServer,
           'controllerInitialized': _controller?.value.isInitialized ?? false,
           'isStreamingImages': _controller?.value.isStreamingImages ?? false,
@@ -2261,8 +2328,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
       // 🚨 تم إزالة _isProcessing من الشروط (تناقض قاتل مع Status.passed!)
       if (!_isVerifyingOnServer &&
-          controller != null &&
-          controller.value.isInitialized) {
+          ((controller != null && controller.value.isInitialized) ||
+              hasFallbackCapture)) {
         if (kDebugMode)
           print(
               '🔄 [VERIFY-START-$attempt] ✅ جميع الشروط مستوفاة → بدء التحقق فوراً');
@@ -2301,6 +2368,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           'isVerifyingOnServer': _isVerifyingOnServer,
           'controllerExists': _controller != null,
           'controllerInitialized': _controller?.value.isInitialized ?? false,
+          'fallbackCaptureExists':
+              _lastProactiveCapturedJpg != null &&
+                  _lastProactiveCapturedFace != null,
         },
       ));
       // #endregion

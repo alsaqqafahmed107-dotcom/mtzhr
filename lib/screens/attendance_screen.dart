@@ -41,7 +41,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     with TickerProviderStateMixin {
   static const bool _enableRemoteDebugTelemetry = true;
   static const String _debugEnvPath =
-      'd:\\new\\.dbg\\camera-login-biometrics.env';
+      'd:\\new\\.dbg\\attendance-spoof-location.env';
   String? _debugServerUrl;
   String? _debugSessionId;
   // #region debug-point C:reporting-helper
@@ -68,7 +68,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         } catch (_) {}
       }
       final url = _debugServerUrl ?? 'http://192.168.1.163:7777/event';
-      final session = _debugSessionId ?? 'camera-login-biometrics';
+      final session = _debugSessionId ?? 'attendance-spoof-location';
       final client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 2);
       final req = await client.postUrl(
@@ -1133,7 +1133,43 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         minVariationPercentage: 0.05, // تقليل من 0.1 إلى 0.05% لتحسين المرونة
       );
 
+      // #region debug-point C:location-stability-result
+      unawaited(_reportDebugEvent(
+        'C',
+        'attendance_screen.dart:_processAttendance:location-stability',
+        'Computed location stability result before attendance decision',
+        data: {
+          'currentAccuracy': _currentPosition?.accuracy,
+          'currentLatitude': _currentPosition?.latitude,
+          'currentLongitude': _currentPosition?.longitude,
+          'isStable': stabilityResult.isStable,
+          'isSuspiciouslyStable': stabilityResult.isSuspiciouslyStable,
+          'isFakeLocation': stabilityResult.isFakeLocation,
+          'maxDistanceVariation': stabilityResult.maxDistanceVariation,
+          'averageDistance': stabilityResult.averageDistance,
+          'totalReadings': stabilityResult.totalReadings,
+          'errorMessage': stabilityResult.errorMessage,
+        },
+      ));
+      // #endregion
+
       if (stabilityResult.isFakeLocation == true) {
+        // #region debug-point C:location-rejected-fake
+        unawaited(_reportDebugEvent(
+          'C',
+          'attendance_screen.dart:_processAttendance:location-rejected-fake',
+          'Attendance rejected because location was flagged as fake',
+          data: {
+            'currentAccuracy': _currentPosition?.accuracy,
+            'isStable': stabilityResult.isStable,
+            'isSuspiciouslyStable': stabilityResult.isSuspiciouslyStable,
+            'isFakeLocation': stabilityResult.isFakeLocation,
+            'maxDistanceVariation': stabilityResult.maxDistanceVariation,
+            'averageDistance': stabilityResult.averageDistance,
+            'totalReadings': stabilityResult.totalReadings,
+          },
+        ));
+        // #endregion
         _showError(Translations.getText('fake_location_detected', lang),
             Translations.getText('fake_location_warning', lang));
         return;
@@ -1141,12 +1177,44 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
       if (stabilityResult.isSuspiciouslyStable == true &&
           (_currentPosition?.accuracy ?? 999) < 25) {
-        _showError(Translations.getText('suspicious_location', lang),
-            Translations.getText('suspicious_location_warning', lang));
-        return;
+        // #region debug-point C:location-warning-suspicious
+        unawaited(_reportDebugEvent(
+          'C',
+          'attendance_screen.dart:_processAttendance:location-warning-suspicious',
+          'Location looked unusually stable but attendance flow continued for server-side validation',
+          data: {
+            'currentAccuracy': _currentPosition?.accuracy,
+            'accuracyThreshold': 25,
+            'isStable': stabilityResult.isStable,
+            'isSuspiciouslyStable': stabilityResult.isSuspiciouslyStable,
+            'isFakeLocation': stabilityResult.isFakeLocation,
+            'maxDistanceVariation': stabilityResult.maxDistanceVariation,
+            'averageDistance': stabilityResult.averageDistance,
+            'totalReadings': stabilityResult.totalReadings,
+          },
+        ));
+        // #endregion
+        _log(
+            '⚠️ الموقع بدا ثابتاً بشكل غير معتاد، لكن سيتم المتابعة والتحقق من الموقع المسموح من الخادم لتفادي رفض مواقع iPhone الحقيقية.');
       }
 
       if (!stabilityResult.isStable) {
+        // #region debug-point C:location-allowed-unstable
+        unawaited(_reportDebugEvent(
+          'C',
+          'attendance_screen.dart:_processAttendance:location-allowed-unstable',
+          'Location was not stable enough but flow continued',
+          data: {
+            'currentAccuracy': _currentPosition?.accuracy,
+            'isStable': stabilityResult.isStable,
+            'isSuspiciouslyStable': stabilityResult.isSuspiciouslyStable,
+            'isFakeLocation': stabilityResult.isFakeLocation,
+            'maxDistanceVariation': stabilityResult.maxDistanceVariation,
+            'averageDistance': stabilityResult.averageDistance,
+            'totalReadings': stabilityResult.totalReadings,
+          },
+        ));
+        // #endregion
         _log(
             '⚠️ ثبات الموقع غير كافٍ، سيتم المتابعة لتفادي رفض الأجهزة الحقيقية');
       }

@@ -1,12 +1,19 @@
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 class LocationStabilityService {
   static final LocationStabilityService _instance =
       LocationStabilityService._internal();
   factory LocationStabilityService() => _instance;
   LocationStabilityService._internal();
+  static const bool _enableRemoteDebugTelemetry = true;
+  static const String _debugEnvPath =
+      'd:\\new\\.dbg\\attendance-spoof-location.env';
+  String? _debugServerUrl;
+  String? _debugSessionId;
 
   // دالة تسجيل الأحداث للتطوير
   void _log(String message) {
@@ -14,6 +21,51 @@ class LocationStabilityService {
       print('📍 [LocationStabilityService] $message');
     }
   }
+
+  // #region debug-point C:reporting-helper
+  Future<void> _reportDebugEvent(
+    String hypothesisId,
+    String location,
+    String msg, {
+    Map<String, dynamic>? data,
+  }) async {
+    if (!_enableRemoteDebugTelemetry) return;
+    try {
+      if (_debugServerUrl == null || _debugSessionId == null) {
+        try {
+          final envText = await File(_debugEnvPath).readAsString();
+          for (final line in envText.split('\n')) {
+            if (line.startsWith('DEBUG_SERVER_URL=')) {
+              _debugServerUrl =
+                  line.substring('DEBUG_SERVER_URL='.length).trim();
+            } else if (line.startsWith('DEBUG_SESSION_ID=')) {
+              _debugSessionId =
+                  line.substring('DEBUG_SESSION_ID='.length).trim();
+            }
+          }
+        } catch (_) {}
+      }
+      final url = _debugServerUrl ?? 'http://192.168.1.163:7777/event';
+      final session = _debugSessionId ?? 'attendance-spoof-location';
+      final client = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 2);
+      final req = await client.postUrl(Uri.parse(url));
+      req.headers.contentType = ContentType.json;
+      req.write(jsonEncode({
+        'sessionId': session,
+        'runId': 'pre-fix',
+        'hypothesisId': hypothesisId,
+        'location': location,
+        'msg': '[DEBUG] $msg',
+        'data': data ?? const {},
+        'ts': DateTime.now().millisecondsSinceEpoch,
+        'traceId': 'location-${DateTime.now().microsecondsSinceEpoch}',
+      }));
+      await (await req.close()).drain<void>();
+      client.close(force: true);
+    } catch (_) {}
+  }
+  // #endregion
 
   /// التحقق من ثبات الموقع
   Future<LocationStabilityResult> checkLocationStability({
@@ -187,6 +239,25 @@ class LocationStabilityService {
     _log('   • الموقع ثابت: $isStable');
     _log('   • مشبوه في الثبات: $isSuspiciouslyStable');
     _log('   • موقع وهمي محتمل: $isFakeLocation');
+    // #region debug-point C:analyze-location-stability
+    unawaited(_reportDebugEvent(
+      'C',
+      'location_stability_service.dart:_analyzeLocationStability',
+      'Location stability analysis completed',
+      data: {
+        'readingsCount': readings.length,
+        'distancesCount': distances.length,
+        'maxDistance': maxDistance,
+        'minDistance': minDistance.isFinite ? minDistance : null,
+        'averageDistance': averageDistance,
+        'maxDistanceVariationThreshold': maxDistanceVariation,
+        'isStable': isStable,
+        'isSuspiciouslyStable': isSuspiciouslyStable,
+        'isFakeLocation': isFakeLocation,
+        'accuracies': readings.map((r) => r.accuracy).toList(),
+      },
+    ));
+    // #endregion
 
     return LocationStabilityResult(
       isStable: isStable,
@@ -263,15 +334,23 @@ class LocationStabilityService {
     bool hasNoMovementAtAll = distances.every((d) => d < 0.01); // أقل من 1 سم
 
     // الموقع مشبوه فقط إذا كان هناك عدة مؤشرات مشبوهة معاً
+    final hasExtremelyConsistentSensorData = averageAccuracy > 0 &&
+        averageAccuracy <= 8 &&
+        accuracyVariance < 0.15 &&
+        hasNoAccuracyVariation;
+
     bool isSuspicious = (hasExactMatches &&
             hasZeroVariation &&
-            averageAccuracy > 0 &&
-            averageAccuracy <= 10 &&
-            accuracyVariance < 0.5) ||
+            hasExtremelyConsistentSensorData &&
+            hasNoAltitudeVariation) ||
         (hasUniformVariation &&
             hasNoAltitudeVariation &&
-            hasNoAccuracyVariation) ||
-        (hasNoMovementAtAll && hasExactMatches);
+            hasNoAccuracyVariation &&
+            averageAccuracy <= 8) ||
+        (hasNoMovementAtAll &&
+            hasExactMatches &&
+            hasExtremelyConsistentSensorData &&
+            hasNoAltitudeVariation);
 
     if (isSuspicious) {
       _log('🚨 كشف موقع ثابت بشكل مريب:');
@@ -282,6 +361,30 @@ class LocationStabilityService {
       _log('   • عدم تباين الدقة: $hasNoAccuracyVariation');
       _log('   • عدم وجود حركة على الإطلاق: $hasNoMovementAtAll');
     }
+
+    // #region debug-point C:suspicious-stability-flags
+    unawaited(_reportDebugEvent(
+      'C',
+      'location_stability_service.dart:_detectSuspiciouslyStableLocation',
+      'Calculated suspiciously stable location flags',
+      data: {
+        'readingsCount': readings.length,
+        'distancesCount': distances.length,
+        'exactMatchCount': exactMatchCount,
+        'zeroVariationCount': zeroVariationCount,
+        'averageAccuracy': averageAccuracy,
+        'accuracyVariance': accuracyVariance,
+        'hasExactMatches': hasExactMatches,
+        'hasZeroVariation': hasZeroVariation,
+        'hasUniformVariation': hasUniformVariation,
+        'hasNoAltitudeVariation': hasNoAltitudeVariation,
+        'hasNoAccuracyVariation': hasNoAccuracyVariation,
+        'hasNoMovementAtAll': hasNoMovementAtAll,
+        'hasExtremelyConsistentSensorData': hasExtremelyConsistentSensorData,
+        'isSuspicious': isSuspicious,
+      },
+    ));
+    // #endregion
 
     return isSuspicious;
   }
@@ -356,6 +459,24 @@ class LocationStabilityService {
       _log('   • موقع مشبوه: $hasSuspiciousFixedLocation');
       _log('   • عدم تباين الوقت: $hasNoTimeVariation');
     }
+
+    // #region debug-point C:fake-location-flags
+    unawaited(_reportDebugEvent(
+      'C',
+      'location_stability_service.dart:_detectFakeLocation',
+      'Calculated fake location flags',
+      data: {
+        'readingsCount': readings.length,
+        'distancesCount': distances.length,
+        'averageDistance': averageDistance,
+        'hasRoundedCoordinates': hasRoundedCoordinates,
+        'hasInvalidCoordinates': hasInvalidCoordinates,
+        'hasSuspiciousFixedLocation': hasSuspiciousFixedLocation,
+        'hasNoTimeVariation': hasNoTimeVariation,
+        'isFake': isFake,
+      },
+    ));
+    // #endregion
 
     return isFake;
   }
