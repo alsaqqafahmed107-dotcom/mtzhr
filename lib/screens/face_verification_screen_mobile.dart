@@ -98,6 +98,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   // #endregion
 
   CameraController? _controller;
+  bool _isInitializingCamera = false;
+  int _cameraInitToken = 0;
+  bool _cameraInitRetryScheduled = false;
+  AppLifecycleState? _lastLifecycleState;
   bool _isInitializing = true;
   bool _isProcessing = false;
   bool _isVerifyingOnServer = false;
@@ -216,6 +220,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _lastLifecycleState = state;
     // #region debug-point B:lifecycle-state
     unawaited(_reportDebugEvent(
       'B',
@@ -241,6 +246,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.detached) {
+      _cameraInitToken++;
+      _isInitializingCamera = false;
+      _cameraInitRetryScheduled = false;
       await _disposeCameraController(updateUi: mounted);
       return;
     }
@@ -1555,7 +1563,15 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       return;
     }
 
+    if (_isInitializingCamera) return;
+    _isInitializingCamera = true;
+    final token = ++_cameraInitToken;
+
     final cameras = await availableCameras();
+    if (!mounted || token != _cameraInitToken) {
+      _isInitializingCamera = false;
+      return;
+    }
     final frontCamera = cameras.firstWhere(
       (camera) => camera.lensDirection == CameraLensDirection.front,
       orElse: () => cameras.first,
@@ -1592,7 +1608,19 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
             formatGroup: attempt.format,
           );
           await trialController.initialize();
+          if (!mounted || token != _cameraInitToken) {
+            try {
+              await trialController.dispose();
+            } catch (_) {}
+            return;
+          }
           await _configureCameraController(trialController);
+          if (!mounted || token != _cameraInitToken) {
+            try {
+              await trialController.dispose();
+            } catch (_) {}
+            return;
+          }
           _controller = trialController;
           trialController = null;
           break;
@@ -1607,6 +1635,13 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       if (_controller == null) {
         throw lastError ?? Exception('تعذر تهيئة الكاميرا على هذا الجهاز.');
       }
+
+      if (!mounted || token != _cameraInitToken) {
+        await _disposeCameraController();
+        return;
+      }
+
+      _cameraInitRetryScheduled = false;
 
       // #region debug-point B:camera-init-success
       unawaited(_reportDebugEvent(
@@ -1629,6 +1664,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         await _startFrameStreaming();
       }
     } catch (e) {
+      if (token != _cameraInitToken) return;
       // #region debug-point B:camera-init-failed
       unawaited(_reportDebugEvent(
         'B',
@@ -1640,6 +1676,35 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         },
       ));
       // #endregion
+
+      final lower = e.toString().toLowerCase();
+      final isTransient = lower.contains('disposed') ||
+          lower.contains('not ready') ||
+          lower.contains('bad state') ||
+          (lower.contains('camera') && lower.contains('closed'));
+      final lifecycleOk = _lastLifecycleState == null ||
+          _lastLifecycleState == AppLifecycleState.resumed;
+      if (mounted &&
+          !_shouldSuppressCameraFailureUi &&
+          isTransient &&
+          lifecycleOk &&
+          !_cameraInitRetryScheduled) {
+        _cameraInitRetryScheduled = true;
+        final friendlyMessage = _lang() == 'ar'
+            ? 'جاري إعادة تشغيل الكاميرا...'
+            : 'Restarting camera...';
+        setState(() {
+          _isInitializing = false;
+          _statusMessage = friendlyMessage;
+        });
+        Future.delayed(const Duration(milliseconds: 450), () {
+          if (!mounted) return;
+          _cameraInitRetryScheduled = false;
+          unawaited(_initializeCamera());
+        });
+        return;
+      }
+
       if (mounted && !_shouldSuppressCameraFailureUi) {
         final friendlyMessage = _friendlyCameraErrorMessage(e);
         setState(() {
@@ -1656,6 +1721,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           rawDetails: e.toString(),
         );
       }
+    } finally {
+      _isInitializingCamera = false;
     }
   }
 
@@ -2933,9 +3000,77 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   @override
   Widget build(BuildContext context) {
     if (_isInitializing) {
-      return const Scaffold(
+      final accent = const Color(0xFF7C3AED);
+      return Scaffold(
         backgroundColor: Colors.black,
-        body: Center(child: CircularProgressIndicator(color: Colors.white)),
+        body: SafeArea(
+          child: Stack(
+            children: [
+              Positioned(
+                top: 6,
+                left: 4,
+                child: IconButton(
+                  onPressed: _smartClose,
+                  icon: const Icon(Icons.close, color: Colors.white),
+                ),
+              ),
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        width: 44,
+                        height: 44,
+                        child: CircularProgressIndicator(
+                          color: accent,
+                          strokeWidth: 3,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        _t('preparing'),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _lang() == 'ar'
+                            ? 'جاري تجهيز الكاميرا للتعرف على الوجه...'
+                            : 'Preparing camera for face verification...',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      TextButton(
+                        onPressed: () {
+                          unawaited(_initializeCamera());
+                        },
+                        child: Text(
+                          _t('retry'),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       );
     }
 
@@ -3035,100 +3170,21 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
             Positioned(
               top: safeTop + 10,
               left: 16,
-              right: 16,
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 520),
-                  child: Container(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.52),
-                      borderRadius: BorderRadius.circular(18),
-                      border:
-                          Border.all(color: Colors.white.withOpacity(0.22)),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          width: 34,
-                          height: 34,
-                          decoration: BoxDecoration(
-                            color: effectiveBorderColor.withOpacity(0.18),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: effectiveBorderColor.withOpacity(0.45),
-                            ),
-                          ),
-                          child: Icon(
-                            _currentProcedureIcon(),
-                            color: Colors.white,
-                            size: 20,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                procedureInfo['title'] ?? '',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                procedureInfo['subtitle'] ?? '',
-                                style: TextStyle(
-                                  color: Colors.white.withOpacity(0.86),
-                                  fontSize: 12,
-                                  height: 1.25,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              if (_isOperationRunning) ...[
-                                const SizedBox(height: 8),
-                                Row(
-                                  children: [
-                                    SizedBox(
-                                      width: 14,
-                                      height: 14,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: effectiveBorderColor,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(
-                                        _t('face_processing_wait'),
-                                        style: TextStyle(
-                                          color: Colors.white.withOpacity(0.86),
-                                          fontSize: 11,
-                                          height: 1.25,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.35),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: Colors.white.withOpacity(0.20)),
+                ),
+                child: IconButton(
+                  icon: const Icon(Icons.close, color: Colors.white),
+                  onPressed: _smartClose,
                 ),
               ),
             ),
             Positioned(
-              top: safeTop + 84,
-              left: 16,
+              top: safeTop + 10,
+              left: 76,
               right: 16,
               child: Center(
                 child: ConstrainedBox(
@@ -3157,9 +3213,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                             ),
                           ),
                           child: Icon(
-                            isLiveChallenge
-                                ? Icons.flash_on
-                                : Icons.info_outline,
+                            isLiveChallenge ? Icons.flash_on : Icons.info_outline,
                             color: Colors.white,
                             size: 20,
                           ),
@@ -3212,9 +3266,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                                                 .clamp(0.0, 1.0),
                                         minHeight: 7,
                                         backgroundColor: Colors.white24,
-                                        valueColor:
-                                            AlwaysStoppedAnimation<Color>(
-                                                effectiveBorderColor),
+                                        valueColor: AlwaysStoppedAnimation<Color>(
+                                            effectiveBorderColor),
                                       ),
                                     ),
                                   ),
@@ -3508,14 +3561,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                   ),
                 ),
               ),
-            Positioned(
-              top: 50,
-              left: 20,
-              child: IconButton(
-                icon: const Icon(Icons.close, color: Colors.white, size: 28),
-                onPressed: _smartClose,
-              ),
-            ),
           ],
         ),
       ),
@@ -3543,7 +3588,7 @@ class _FaceGuidePainter extends CustomPainter {
     final frameWidth = min(size.width * 0.78, 390.0);
     final frameHeight = min(size.height * 0.46, frameWidth * 1.22);
     final rect = Rect.fromCenter(
-      center: Offset(size.width / 2, size.height * 0.49),
+      center: Offset(size.width / 2, size.height * 0.50),
       width: frameWidth,
       height: frameHeight,
     );
@@ -3557,23 +3602,23 @@ class _FaceGuidePainter extends CustomPainter {
       ..addOval(rect);
     canvas.drawPath(
       overlayPath,
-      Paint()..color = Colors.black.withOpacity(0.32),
+      Paint()..color = Colors.black.withOpacity(0.26),
     );
 
     final framePaint = Paint()
       ..shader = SweepGradient(
         colors: [
-          color.withOpacity(0.95),
-          Colors.white.withOpacity(0.80),
-          color.withOpacity(0.95),
+          color.withOpacity(1.0),
+          Colors.white.withOpacity(0.90),
+          color.withOpacity(1.0),
         ],
       ).createShader(rect)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = faceDetected ? 4.6 : 3.6;
+      ..strokeWidth = faceDetected ? 5.2 : 4.2;
     final glowPaint = Paint()
-      ..color = color.withOpacity(0.08 + (glowStrength * 0.10))
+      ..color = color.withOpacity(0.10 + (glowStrength * 0.12))
       ..style = PaintingStyle.stroke
-      ..strokeWidth = faceDetected ? 16.0 : 12.0
+      ..strokeWidth = faceDetected ? 18.0 : 14.0
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
     final accentArcPaint = Paint()
       ..color = (state == _GuideVisualState.ready
@@ -3581,7 +3626,7 @@ class _FaceGuidePainter extends CustomPainter {
               : color.withOpacity(0.70))
           .withOpacity(faceDetected ? 0.95 : 0.80)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 4.2
+      ..strokeWidth = 5.0
       ..strokeCap = StrokeCap.round;
     final innerFillPaint = Paint()
       ..shader = RadialGradient(
@@ -3592,9 +3637,9 @@ class _FaceGuidePainter extends CustomPainter {
         radius: 0.95,
       ).createShader(rect);
     final innerRingPaint = Paint()
-      ..color = Colors.white.withOpacity(0.16)
+      ..color = Colors.white.withOpacity(0.22)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4;
+      ..strokeWidth = 1.6;
 
     canvas.drawPath(ovalPath, innerFillPaint);
     canvas.drawPath(Path()..addOval(rect.inflate(4)), glowPaint);
