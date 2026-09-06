@@ -31,6 +31,17 @@ class FaceVerificationScreen extends StatefulWidget {
   State<FaceVerificationScreen> createState() => _FaceVerificationScreenState();
 }
 
+enum _GuideVisualState {
+  noFace,
+  multipleFaces,
+  outsideFrame,
+  aligning,
+  ready,
+  scanning,
+  success,
+  error,
+}
+
 class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     with WidgetsBindingObserver {
   static const bool _enableRemoteDebugTelemetry = true;
@@ -147,6 +158,14 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   Face? _lastValidFace;
   bool _verificationCaptureCompleted = false;
   int _noFaceGraceStreak = 0;
+  bool _isFaceWithinGuide = false;
+  double _faceGuideFitScore = 0.0;
+  bool _showIndicators = true;
+  _GuideVisualState _stableGuideState = _GuideVisualState.noFace;
+  _GuideVisualState? _pendingGuideState;
+  DateTime? _pendingGuideSince;
+  DateTime _lastUiRebuildAt = DateTime.fromMillisecondsSinceEpoch(0);
+  String _lastUiChallengeMessage = '';
 
   static const Map<DeviceOrientation, int> _cameraOrientationMap = {
     DeviceOrientation.portraitUp: 0,
@@ -336,6 +355,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       if (faceCount > 1) {
         return 'تم اكتشاف أكثر من وجه في الإطار. يجب أن يظهر وجه موظف واحد فقط.';
       }
+      if (!_isFaceWithinGuide) {
+        return 'الوجه خارج الإطار المثالي. حرّك الوجه إلى منتصف العدسة حتى يتغيّر لون الإطار.';
+      }
       return _analysisSnapshot.guidanceAr;
     }
 
@@ -345,7 +367,149 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     if (faceCount > 1) {
       return 'More than one face detected. Only one employee face is allowed in the frame.';
     }
+    if (!_isFaceWithinGuide) {
+      return 'Your face is outside the ideal guide. Move it to the center until the frame color changes.';
+    }
     return _analysisSnapshot.guidanceEn;
+  }
+
+  ({bool inside, double score}) _evaluateGuideFit(Face face, Size imageSize) {
+    final width = max(imageSize.width, 1.0);
+    final height = max(imageSize.height, 1.0);
+    final centerX = (face.boundingBox.center.dx / width).clamp(0.0, 1.0);
+    final centerY = (face.boundingBox.center.dy / height).clamp(0.0, 1.0);
+    final areaRatio =
+        ((face.boundingBox.width * face.boundingBox.height) / (width * height))
+            .clamp(0.0, 1.0);
+
+    final centerDx = (centerX - 0.5).abs();
+    final centerDy = (centerY - 0.49).abs();
+    final centerScore = (1.0 -
+            (centerDx / 0.20).clamp(0.0, 1.0) * 0.55 -
+            (centerDy / 0.18).clamp(0.0, 1.0) * 0.45)
+        .clamp(0.0, 1.0);
+    final sizeScore = areaRatio >= 0.09 && areaRatio <= 0.28
+        ? 1.0
+        : (1.0 - ((areaRatio - 0.18).abs() / 0.14)).clamp(0.0, 1.0);
+    final poseScore = (1.0 -
+            (((face.headEulerAngleY ?? 0.0).abs() / 22.0) * 0.55) -
+            (((face.headEulerAngleX ?? 0.0).abs() / 18.0) * 0.45))
+        .clamp(0.0, 1.0);
+    final score = ((centerScore * 0.5) + (sizeScore * 0.3) + (poseScore * 0.2))
+        .clamp(0.0, 1.0);
+    final inside = centerDx <= 0.14 &&
+        centerDy <= 0.16 &&
+        areaRatio >= 0.08 &&
+        areaRatio <= 0.32 &&
+        (face.headEulerAngleY ?? 0.0).abs() <= 20 &&
+        (face.headEulerAngleX ?? 0.0).abs() <= 16;
+    return (inside: inside, score: score);
+  }
+
+  _GuideVisualState get _guideVisualState => _stableGuideState;
+
+  _GuideVisualState _computeRawGuideState() {
+    if (_faceMatched || _completedSuccessfully) {
+      return _GuideVisualState.success;
+    }
+    if (_livenessStatus == LivenessStatus.spoofDetected ||
+        _livenessStatus == LivenessStatus.failed ||
+        _livenessStatus == LivenessStatus.timeout) {
+      return _GuideVisualState.error;
+    }
+    if (_currentFaceCount > 1) {
+      return _GuideVisualState.multipleFaces;
+    }
+    if (_currentDetectedFace == null) {
+      return _GuideVisualState.noFace;
+    }
+    if (_isVerifyingOnServer || _livenessStatus == LivenessStatus.analyzing) {
+      return _GuideVisualState.scanning;
+    }
+    if (!_isFaceWithinGuide) {
+      return _GuideVisualState.outsideFrame;
+    }
+
+    final score = _displaySnapshot.overallScore;
+    final isReadyStable = _stableGuideState == _GuideVisualState.ready;
+    final readyEnter = 0.62;
+    final readyExit = 0.52;
+    final ready = _livenessStatus == LivenessStatus.passed ||
+        (isReadyStable ? score >= readyExit : score >= readyEnter);
+    if (ready) return _GuideVisualState.ready;
+
+    return _GuideVisualState.aligning;
+  }
+
+  bool _updateStableGuideState({bool force = false}) {
+    final now = DateTime.now();
+    final raw = _computeRawGuideState();
+    if (raw == _stableGuideState) {
+      _pendingGuideState = null;
+      _pendingGuideSince = null;
+      return false;
+    }
+
+    final immediate = force ||
+        raw == _GuideVisualState.success ||
+        raw == _GuideVisualState.error ||
+        raw == _GuideVisualState.scanning ||
+        raw == _GuideVisualState.multipleFaces;
+
+    if (immediate) {
+      _stableGuideState = raw;
+      _pendingGuideState = null;
+      _pendingGuideSince = null;
+      return true;
+    }
+
+    if (_pendingGuideState != raw) {
+      _pendingGuideState = raw;
+      _pendingGuideSince = now;
+      return false;
+    }
+
+    final since = _pendingGuideSince;
+    if (since == null) return false;
+    if (now.difference(since) >= const Duration(milliseconds: 350)) {
+      _stableGuideState = raw;
+      _pendingGuideState = null;
+      _pendingGuideSince = null;
+      return true;
+    }
+    return false;
+  }
+
+  void _requestUiRebuild({bool force = false}) {
+    if (!mounted) return;
+    final now = DateTime.now();
+    if (!force &&
+        now.difference(_lastUiRebuildAt) < const Duration(milliseconds: 120)) {
+      return;
+    }
+    _lastUiRebuildAt = now;
+    setState(() {});
+  }
+
+  Color get _guideAccentColor {
+    switch (_guideVisualState) {
+      case _GuideVisualState.noFace:
+        return const Color(0xFF7C3AED);
+      case _GuideVisualState.multipleFaces:
+        return const Color(0xFFEF4444);
+      case _GuideVisualState.outsideFrame:
+        return const Color(0xFF7C3AED);
+      case _GuideVisualState.aligning:
+        return const Color(0xFF7C3AED);
+      case _GuideVisualState.ready:
+        return const Color(0xFF7C3AED);
+      case _GuideVisualState.scanning:
+        return const Color(0xFF7C3AED);
+      case _GuideVisualState.success:
+        return const Color(0xFF22C55E);
+      case _GuideVisualState.error:
+        return const Color(0xFFEF4444);
+    }
   }
 
   // ⚡ إصلاح 2: نظام التقاط الاستباقي (نفس منطق التسجيل)
@@ -534,10 +698,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     Uint8List originalBytes, {
     required String purpose,
   }) async {
-    if (!Platform.isIOS) {
-      return originalBytes;
-    }
-
     try {
       final decoded = img.decodeImage(originalBytes);
       if (decoded == null) {
@@ -556,12 +716,23 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       var normalized = img.bakeOrientation(decoded);
       final isFrontCamera =
           _controller?.description.lensDirection == CameraLensDirection.front;
-      if (isFrontCamera) {
+      if (Platform.isIOS && isFrontCamera) {
         normalized = img.flipHorizontal(normalized);
       }
 
+      final maxDim = max(normalized.width, normalized.height);
+      if (maxDim > 960) {
+        final scale = 960 / maxDim;
+        normalized = img.copyResize(
+          normalized,
+          width: (normalized.width * scale).round(),
+          height: (normalized.height * scale).round(),
+          interpolation: img.Interpolation.average,
+        );
+      }
+
       final encoded = Uint8List.fromList(
-        img.encodeJpg(normalized, quality: 92),
+        img.encodeJpg(normalized, quality: 85),
       );
       unawaited(_reportDebugEvent(
         'E',
@@ -631,6 +802,50 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
   String _tParams(String key, Map<String, String> params) =>
       Translations.getTextWithParams(key, _lang(), params);
+
+  bool get _isOperationRunning =>
+      _isProcessing ||
+      _isVerifyingOnServer ||
+      _livenessStatus == LivenessStatus.analyzing;
+
+  Map<String, String> _currentProcedureInfo() {
+    if (_isInitializing ||
+        _controller == null ||
+        !(_controller?.value.isInitialized ?? false)) {
+      return {
+        'title': _t('face_procedure_setup_title'),
+        'subtitle': _t('face_procedure_setup_desc'),
+      };
+    }
+
+    return {
+      'title': _t('face_procedure_recognition_title'),
+      'subtitle': _isVerifyingOnServer
+          ? _t('face_procedure_recognition_desc')
+          : _t('face_procedure_scan_desc'),
+    };
+  }
+
+  IconData _currentProcedureIcon() {
+    if (_isInitializing ||
+        _controller == null ||
+        !(_controller?.value.isInitialized ?? false)) {
+      return Icons.camera_alt;
+    }
+    if (_isVerifyingOnServer) return Icons.verified_user;
+    return Icons.face_retouching_natural;
+  }
+
+  Map<String, dynamic> _currentChallengeUi() {
+    final msg = _challengeMessage.trim();
+    final lower = msg.toLowerCase();
+    final isChallenge = msg.isNotEmpty &&
+        (lower.contains('تحدي') || lower.contains('challenge'));
+    return {
+      'message': msg.isEmpty ? _t('face_inside_frame') : msg,
+      'isChallenge': isChallenge,
+    };
+  }
 
   String _formatDialogMessage(String message, {String? rawDetails}) {
     final normalizedMessage = message.trim();
@@ -707,8 +922,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           : 'No clear face was captured at the final moment. Keep your face inside the frame with good lighting and try again.';
     }
 
-    if (lower.contains('more than one face') ||
-        lower.contains('أكثر من وجه')) {
+    if (lower.contains('more than one face') || lower.contains('أكثر من وجه')) {
       return _lang() == 'ar'
           ? 'تم اكتشاف أكثر من وجه داخل الإطار. يجب أن يظهر وجه موظف واحد فقط أثناء التحقق.'
           : 'More than one face was detected in the frame. Only one employee face must be visible during verification.';
@@ -820,9 +1034,10 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         result['success'] == true ||
         result['SUCCESS'] == true;
     final matched = result['IsMatch'] == true || result['Matched'] == true;
-    final employee = (result['EmployeeNumber'] ?? result['employeeNumber'] ?? '')
-        .toString()
-        .trim();
+    final employee =
+        (result['EmployeeNumber'] ?? result['employeeNumber'] ?? '')
+            .toString()
+            .trim();
     final confidence = (result['ConfidenceScore'] as num?)?.toDouble();
 
     if (employee.isNotEmpty && employee != widget.employeeNumber) {
@@ -1126,16 +1341,19 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   void _setupLivenessListeners() {
     _livenessService.statusStream.listen((status) {
       if (!mounted) return;
-      setState(() {
-        _livenessStatus = status;
-      });
+      if (status == _livenessStatus) return;
+      _livenessStatus = status;
       _handleLivenessStatusChange(status);
+      _updateStableGuideState(force: status == LivenessStatus.analyzing);
+      _requestUiRebuild(force: true);
     });
     _livenessService.challengeStream.listen((challenge) {
       if (!mounted) return;
-      setState(() {
-        _challengeMessage = _describeLivenessChallenge(challenge);
-      });
+      final msg = _describeLivenessChallenge(challenge);
+      if (msg == _challengeMessage) return;
+      _challengeMessage = msg;
+      _lastUiChallengeMessage = msg;
+      _requestUiRebuild(force: true);
       // #region debug-point A:liveness-active-challenge
       unawaited(_reportDebugEvent(
         'A',
@@ -1153,7 +1371,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
   }
 
   String _describeLivenessChallenge(LivenessChallenge challenge) {
-    final remaining = challenge.timeLimit.inSeconds;
+    final elapsed = DateTime.now().difference(challenge.startTime);
+    final remaining =
+        max(0, challenge.timeLimit.inSeconds - elapsed.inSeconds);
     switch (challenge.type) {
       case LivenessChallengeType.blink:
         return _lang() == 'ar'
@@ -1271,7 +1491,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           },
         ));
         // #endregion
-        unawaited(_tryStartVerificationWithRetry(maxAttempts: 3, delayMs: 300));
+        unawaited(_tryStartVerificationWithRetry(maxAttempts: 10, delayMs: 200));
         break;
       case LivenessStatus.spoofDetected:
         _borderColor = Colors.red;
@@ -1681,8 +1901,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       final samplePixels = _extractFaceTextureSamples(image, currentFace);
       final noiseVar =
           LivenessDetectionService.computeNoiseVariance(samplePixels);
-      final depthPayload =
-          _extractFaceDepthAnalysisPayload(image, currentFace);
+      final depthPayload = _extractFaceDepthAnalysisPayload(image, currentFace);
       if (depthPayload != null) {
         _livenessService.recordDepthAnalysisFrame(
           pixels: depthPayload['pixels'] as List<int>,
@@ -1702,10 +1921,46 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         imageHeight: imageSize.height,
       );
 
+      final guideFit = currentFace == null
+          ? (inside: false, score: 0.0)
+          : _evaluateGuideFit(currentFace, imageSize);
       if (mounted) {
+        _currentFaceCount = faceCount;
+        _currentDetectedFace = currentFace;
+        _isFaceWithinGuide = faceCount == 1 && guideFit.inside;
+        _faceGuideFitScore = faceCount == 1 ? guideFit.score : 0.0;
+
+        bool stableChanged =
+            _updateStableGuideState(force: _isVerifyingOnServer);
+
+        bool challengeChanged = false;
+        if (_lockedAnalysisSnapshot == null &&
+            !_verificationStartRequested &&
+            !_isVerifyingOnServer) {
+          _analysisSnapshot = _livenessService.currentSnapshot;
+          final activeChallenge = _livenessService.currentChallenge;
+          final nextChallengeMessage = activeChallenge != null
+              ? _describeLivenessChallenge(activeChallenge)
+              : _getFacePresenceGuidance(faceCount);
+          if (nextChallengeMessage != _lastUiChallengeMessage) {
+            _lastUiChallengeMessage = nextChallengeMessage;
+            _challengeMessage = nextChallengeMessage;
+            challengeChanged = true;
+          }
+        }
+
+        if (stableChanged || challengeChanged) {
+          _requestUiRebuild(force: true);
+        } else {
+          _requestUiRebuild();
+        }
+      }
+      /*  if (mounted) {
         setState(() {
           _currentFaceCount = faceCount;
           _currentDetectedFace = currentFace;
+          _isFaceWithinGuide = faceCount == 1 && guideFit.inside;
+          _faceGuideFitScore = faceCount == 1 ? guideFit.score : 0.0;
           if (_lockedAnalysisSnapshot == null &&
               !_verificationStartRequested &&
               !_isVerifyingOnServer) {
@@ -1713,7 +1968,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
             _challengeMessage = _getFacePresenceGuidance(faceCount);
           }
         });
-      }
+      }*/
 
       _previousTrackedFace = currentFace;
     } catch (e) {
@@ -1748,6 +2003,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       _isProcessing = true;
       _statusMessage = _t('verifying_face_features');
     });
+    _updateStableGuideState(force: true);
+    _requestUiRebuild(force: true);
     // #region debug-point B:capture-enter
     unawaited(_reportDebugEvent(
       'B',
@@ -1762,9 +2019,22 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     ));
     // #endregion
 
+    Timer? watchdog;
     Uint8List? finalImageBytes;
     Face? finalFace;
     String? failReason;
+
+    watchdog = Timer(const Duration(seconds: 55), () {
+      if (!mounted) return;
+      if (_closeHandled || _faceMatched || _completedSuccessfully) return;
+      if (_isVerifyingOnServer) {
+        _handleFailure(
+          _lang() == 'ar'
+              ? 'تأخر التحقق من الوجه أكثر من اللازم. تحقق من اتصال الإنترنت والخادم ثم أعد المحاولة.'
+              : 'Face verification is taking too long. Check connectivity and the server, then try again.',
+        );
+      }
+    });
 
     try {
       if (_currentFaceCount <= 0) {
@@ -1802,9 +2072,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           'failedChecks': livenessResult.failedChecks,
           'completedChallengeCount': _livenessService.completedChallengeCount,
           'requiredChallengeCount': _livenessService.requiredChallenges,
-          'completedChallengeTypes': _livenessService.completedChallenges
-              .map((c) => c.name)
-              .toList(),
+          'completedChallengeTypes':
+              _livenessService.completedChallenges.map((c) => c.name).toList(),
           'sessionDurationSec':
               DateTime.now().difference(_sessionStartTime).inSeconds,
           'trackingScore': _displaySnapshot.trackingScore,
@@ -2026,13 +2295,12 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       final livenessMetadata = {
         'livenessScore': livenessResult.livenessScore,
         'spoofRisk': livenessResult.spoofRisk,
-        'passedChecks': livenessResult.passedChecks,
-        'challengesCompleted': _livenessService.completedChallengeCount,
+        'sessionDurationSec':
+            DateTime.now().difference(_sessionStartTime).inSeconds,
+        'imageSource': fallbackUsed,
         'activeChallenge': {
           'requiredCount': _livenessService.requiredChallenges,
           'completedCount': _livenessService.completedChallengeCount,
-          'completedTypes':
-              _livenessService.completedChallenges.map((c) => c.name).toList(),
         },
         'passiveAnalysis': {
           'trackingScore': snapshotForVerification.trackingScore,
@@ -2046,17 +2314,6 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           'completedSignals': snapshotForVerification.completedSignals,
           'requiredSignals': snapshotForVerification.requiredSignals,
         },
-        // ⚡ إصلاح حساب مدة الجلسة: من وقت بدء الجلسة الفعلي
-        'sessionDurationSec':
-            DateTime.now().difference(_sessionStartTime).inSeconds,
-        'verificationTimestamp': DateTime.now().toIso8601String(),
-        // ⚡ معلومات مصدر الصورة للتشخيص
-        'imageSource': fallbackUsed,
-        'capturedFallbackUsed': fallbackUsed != 'DIRECT',
-        'platform': Platform.operatingSystem,
-        'captureBytesKb': finalImageBytes!.length ~/ 1024,
-        'uploadBytesKb': uploadBytes.length ~/ 1024,
-        'flowVersion': 'VERIFY_V2',
       };
       final t4 = DateTime.now().difference(perfTrace).inMilliseconds;
       if (kDebugMode) {
@@ -2083,9 +2340,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       ));
       // #endregion
 
-      // 🔍 المرحلة 5: Retry ذكي لإرسال التحقق (3 محاولات بدون إعادة Liveness!)
+      // 🔍 المرحلة 5: إرسال التحقق للخادم
       phase = 'VERIFY_API_SEND';
-      const maxAttempts = 3;
+      const maxAttempts = 1;
       Map<String, dynamic>? finalResult;
       String? lastApiErr;
 
@@ -2107,7 +2364,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
             livenessScore: livenessResult.livenessScore,
             challengesCompleted: _livenessService.completedChallengeCount,
             spoofRisk: livenessResult.spoofRisk,
-            timeout: const Duration(seconds: 45),
+            timeout: const Duration(seconds: 25),
           );
           final t5sub = swApi.elapsedMilliseconds;
           finalResult = r;
@@ -2341,6 +2598,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           rawDetails: e.toString(),
         );
       }
+    } finally {
+      watchdog?.cancel();
     }
   }
 
@@ -2354,8 +2613,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
       if (!mounted) return;
       final controller = _controller;
-      final bool hasFallbackCapture =
-          _lastProactiveCapturedJpg != null && _lastProactiveCapturedFace != null;
+      final bool hasFallbackCapture = _lastProactiveCapturedJpg != null &&
+          _lastProactiveCapturedFace != null;
       final String reason1 =
           _isVerifyingOnServer ? "_isVerifyingOnServer=true" : "✓";
       final String reason2 = controller == null ? "controller=NULL" : "✓";
@@ -2365,10 +2624,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
               : "✓";
       final String reason4 =
           hasFallbackCapture ? "fallback-ready" : "no-fallback";
-      final String reasonsFailed =
-          [reason1, reason2, reason3, reason4]
-              .where((e) => e != "✓" && e != "fallback-ready")
-              .join(", ");
+      final String reasonsFailed = [reason1, reason2, reason3, reason4]
+          .where((e) => e != "✓" && e != "fallback-ready")
+          .join(", ");
       if (kDebugMode) {
         print(
             '🔄 [VERIFY-START] محاولة $attempt/$maxAttempts: الفشل المحتمل=[$reasonsFailed]');
@@ -2432,9 +2690,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           'isVerifyingOnServer': _isVerifyingOnServer,
           'controllerExists': _controller != null,
           'controllerInitialized': _controller?.value.isInitialized ?? false,
-          'fallbackCaptureExists':
-              _lastProactiveCapturedJpg != null &&
-                  _lastProactiveCapturedFace != null,
+          'fallbackCaptureExists': _lastProactiveCapturedJpg != null &&
+              _lastProactiveCapturedFace != null,
         },
       ));
       // #endregion
@@ -2492,7 +2749,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
     });
     _verificationStartRequested = false;
     _showFailureDialog(
-      title: _lang() == 'ar' ? 'فشل التحقق من الوجه' : 'Face Verification Failed',
+      title:
+          _lang() == 'ar' ? 'فشل التحقق من الوجه' : 'Face Verification Failed',
       message: message,
       rawDetails: rawDetails,
     );
@@ -2525,7 +2783,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
           ? 'لم يكتمل فحص العين والرمش بشكل كافٍ.'
           : 'Eye activity validation did not complete sufficiently.';
     }
-    return _lang() == 'ar' ? 'فشل التحقق من الوجه.' : 'Face verification failed.';
+    return _lang() == 'ar'
+        ? 'فشل التحقق من الوجه.'
+        : 'Face verification failed.';
   }
 
   void _resetAndStartOver() {
@@ -2559,6 +2819,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       _lockedAnalysisSnapshot = null;
       _currentDetectedFace = null;
       _currentFaceCount = 0;
+      _isFaceWithinGuide = false;
+      _faceGuideFitScore = 0.0;
       _analysisSnapshot = const PassiveLivenessSnapshot.empty();
     });
     _livenessService.initialize();
@@ -2600,12 +2862,62 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
         : normalized >= 0.5
             ? Colors.orangeAccent
             : Colors.redAccent;
+    final Color chipBackground = passed
+        ? const Color(0xFF14532D) // أخضر داكن
+        : normalized >= 0.5
+            ? const Color(0xFF7C2D12) // برتقالي داكن
+            : const Color(0xFF7F1D1D); // أحمر داكن
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.black54,
+        color: chipBackground,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: chipColor.withOpacity(0.8)),
+        border: Border.all(color: chipColor.withOpacity(0.65)),
+        boxShadow: [
+          BoxShadow(
+            color: chipColor.withOpacity(0.10),
+            blurRadius: 8,
+            spreadRadius: 0,
+          ),
+        ],
+      ),
+      child: Text(
+        '${passed ? "✓ " : ""}$label ${(normalized * 100).round()}%',
+        style: const TextStyle(
+          color: Colors.white, // النص أبيض ثابت بدل chipColor
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+/*
+  Widget _buildMetricChip(String label, double value, {required bool passed}) {
+    final normalized = value.clamp(0.0, 1.0);
+    final Color chipColor = passed
+        ? Colors.greenAccent
+        : normalized >= 0.5
+            ? Colors.orangeAccent
+            : Colors.redAccent;
+    final Color chipBackground = passed
+        ? Colors.greenAccent.withOpacity(0.14)
+        : normalized >= 0.5
+            ? Colors.orangeAccent.withOpacity(0.16)
+            : Colors.redAccent.withOpacity(0.14);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: chipBackground,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: chipColor.withOpacity(0.65)),
+        boxShadow: [
+          BoxShadow(
+            color: chipColor.withOpacity(0.10),
+            blurRadius: 8,
+            spreadRadius: 0,
+          ),
+        ],
       ),
       child: Text(
         '${passed ? "✓ " : ""}$label ${(normalized * 100).round()}%',
@@ -2617,7 +2929,7 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
       ),
     );
   }
-
+*/
   @override
   Widget build(BuildContext context) {
     if (_isInitializing) {
@@ -2629,6 +2941,22 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
 
     final previewSize = _controller?.value.previewSize;
     final displaySnapshot = _displaySnapshot;
+    final guideAccent = _guideAccentColor;
+    final effectiveBorderColor = _faceMatched ? Colors.green : guideAccent;
+    final safeTop = MediaQuery.of(context).padding.top;
+    final procedureInfo = _currentProcedureInfo();
+    final challengeUi = _currentChallengeUi();
+    final challengeMessage = (challengeUi['message'] as String?) ?? '';
+    final isLiveChallenge = challengeUi['isChallenge'] == true;
+    final challengesDone = _livenessService.completedChallengeCount;
+    final challengesRequired = _livenessService.requiredChallenges;
+    final challengeProgress = _tParams(
+      'face_challenge_progress',
+      {
+        'done': challengesDone.toString(),
+        'required': challengesRequired.toString(),
+      },
+    );
 
     return PopScope<Object?>(
       canPop: false,
@@ -2655,15 +2983,17 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                               painter: _FaceGuidePainter(
                                 faceDetected: false,
                                 readiness: 0,
-                                color: _borderColor,
+                                color: effectiveBorderColor,
+                                fitScore: _faceGuideFitScore,
+                                state: _guideVisualState,
                               ),
                             ),
                           ),
                           Center(
                             child: CircularProgressIndicator(
-                              color: _borderColor == Colors.red
+                              color: effectiveBorderColor == Colors.red
                                   ? Colors.orange
-                                  : _borderColor,
+                                  : effectiveBorderColor,
                             ),
                           ),
                         ],
@@ -2689,7 +3019,9 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                               painter: _FaceGuidePainter(
                                 faceDetected: _currentDetectedFace != null,
                                 readiness: displaySnapshot.overallScore,
-                                color: _borderColor,
+                                color: effectiveBorderColor,
+                                fitScore: _faceGuideFitScore,
+                                state: _guideVisualState,
                               ),
                             ),
                           ),
@@ -2701,84 +3033,194 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
               ),
             ),
             Positioned(
-              top: 54,
+              top: safeTop + 10,
               left: 16,
               right: 16,
               child: Center(
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 22, vertical: 11),
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    _t('liveness_title'),
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 520),
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.52),
+                      borderRadius: BorderRadius.circular(18),
+                      border:
+                          Border.all(color: Colors.white.withOpacity(0.22)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 34,
+                          height: 34,
+                          decoration: BoxDecoration(
+                            color: effectiveBorderColor.withOpacity(0.18),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: effectiveBorderColor.withOpacity(0.45),
+                            ),
+                          ),
+                          child: Icon(
+                            _currentProcedureIcon(),
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                procedureInfo['title'] ?? '',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                procedureInfo['subtitle'] ?? '',
+                                style: TextStyle(
+                                  color: Colors.white.withOpacity(0.86),
+                                  fontSize: 12,
+                                  height: 1.25,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              if (_isOperationRunning) ...[
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: effectiveBorderColor,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        _t('face_processing_wait'),
+                                        style: TextStyle(
+                                          color: Colors.white.withOpacity(0.86),
+                                          fontSize: 11,
+                                          height: 1.25,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
               ),
             ),
-            if (_challengeMessage.isNotEmpty)
-              Positioned(
-                top: 116,
-                left: 16,
-                right: 16,
-                child: Center(
+            Positioned(
+              top: safeTop + 84,
+              left: 16,
+              right: 16,
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 520),
                   child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 22, vertical: 14),
+                    duration: const Duration(milliseconds: 220),
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
                     decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          _borderColor.withOpacity(0.95),
-                          _borderColor.withOpacity(0.75),
-                        ],
+                      color: Colors.black.withOpacity(0.52),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: effectiveBorderColor.withOpacity(0.45),
                       ),
-                      borderRadius: BorderRadius.circular(22),
-                      boxShadow: [
-                        BoxShadow(
-                          color: _borderColor.withOpacity(0.4),
-                          blurRadius: 20,
-                          spreadRadius: 2,
-                        ),
-                      ],
                     ),
                     child: Row(
-                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        AnimatedContainer(
-                          duration: const Duration(milliseconds: 500),
-                          width: 12,
-                          height: 12,
+                        Container(
+                          width: 34,
+                          height: 34,
                           decoration: BoxDecoration(
+                            color: effectiveBorderColor.withOpacity(0.18),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: effectiveBorderColor.withOpacity(0.45),
+                            ),
+                          ),
+                          child: Icon(
+                            isLiveChallenge
+                                ? Icons.flash_on
+                                : Icons.info_outline,
                             color: Colors.white,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.white.withOpacity(0.6),
-                                blurRadius: 10,
-                                spreadRadius: 2,
-                              ),
-                            ],
+                            size: 20,
                           ),
                         ),
                         const SizedBox(width: 12),
-                        Flexible(
-                          child: Text(
-                            _challengeMessage,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                            ),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                isLiveChallenge
+                                    ? _t('face_challenge_title')
+                                    : _t('face_guidance_title'),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                challengeMessage,
+                                style: TextStyle(
+                                  color: Colors.white.withOpacity(0.90),
+                                  fontSize: 14,
+                                  height: 1.25,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Row(
+                                children: [
+                                  Text(
+                                    challengeProgress,
+                                    style: TextStyle(
+                                      color: Colors.white.withOpacity(0.80),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(999),
+                                      child: LinearProgressIndicator(
+                                        value: challengesRequired <= 0
+                                            ? 0.0
+                                            : (challengesDone / challengesRequired)
+                                                .clamp(0.0, 1.0),
+                                        minHeight: 7,
+                                        backgroundColor: Colors.white24,
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(
+                                                effectiveBorderColor),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -2786,19 +3228,27 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                   ),
                 ),
               ),
+            ),
             Positioned(
               left: 16,
               right: 16,
-              bottom: 170,
+              bottom: 168,
               child: Center(
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 460),
                   child: Container(
                     padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.30),
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: Colors.white.withOpacity(0.10)),
+                      color: Colors.white.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: Colors.white.withOpacity(0.22)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.08),
+                          blurRadius: 12,
+                          spreadRadius: 0,
+                        ),
+                      ],
                     ),
                     child: Column(
                       children: [
@@ -2808,8 +3258,8 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                             value: _displaySignalProgress,
                             minHeight: 8,
                             backgroundColor: Colors.white24,
-                            valueColor:
-                                AlwaysStoppedAnimation<Color>(_borderColor),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                                effectiveBorderColor),
                           ),
                         ),
                         const SizedBox(height: 8),
@@ -2833,50 +3283,75 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                           ),
                         ),
                         const SizedBox(height: 10),
-                        Wrap(
-                          alignment: WrapAlignment.center,
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            _buildMetricChip(
-                              _lang() == 'ar' ? 'التموضع' : 'Tracking',
-                              displaySnapshot.trackingScore,
-                              passed: displaySnapshot.trackingPassed,
+                        TextButton.icon(
+                          onPressed: () {
+                            if (!mounted) return;
+                            setState(() {
+                              _showIndicators = !_showIndicators;
+                            });
+                          },
+                          icon: Icon(
+                            _showIndicators
+                                ? Icons.keyboard_arrow_up
+                                : Icons.keyboard_arrow_down,
+                            color: Colors.white,
+                          ),
+                          label: Text(
+                            _showIndicators
+                                ? _t('face_hide_indicators')
+                                : _t('face_show_indicators'),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
                             ),
-                            _buildMetricChip(
-                              _lang() == 'ar' ? 'الوضعية' : 'Pose',
-                              displaySnapshot.poseScore,
-                              passed: displaySnapshot.posePassed,
-                            ),
-                            _buildMetricChip(
-                              _lang() == 'ar' ? 'العينان' : 'Eyes',
-                              displaySnapshot.eyeActivityScore,
-                              passed: displaySnapshot.eyeActivityPassed,
-                            ),
-                            _buildMetricChip(
-                              _lang() == 'ar' ? 'التنفس' : 'Breath',
-                              displaySnapshot.breathingScore,
-                              passed: displaySnapshot.breathingPassed,
-                            ),
-                            _buildMetricChip(
-                              _lang() == 'ar' ? 'النسيج' : 'Texture',
-                              displaySnapshot.textureScore,
-                              passed: displaySnapshot.texturePassed,
-                            ),
-                            _buildMetricChip(
-                              _lang() == 'ar' ? 'المعالم' : 'Landmarks',
-                              displaySnapshot.landmarkScore,
-                              passed: displaySnapshot.landmarkPassed,
-                            ),
-                            _buildMetricChip(
-                              _lang() == 'ar'
-                                  ? 'مقاومة الانتحال'
-                                  : 'Anti-spoof',
-                              displaySnapshot.antiSpoofScore,
-                              passed: displaySnapshot.antiSpoofPassed,
-                            ),
-                          ],
+                          ),
                         ),
+                        if (_showIndicators) ...[
+                          Wrap(
+                            alignment: WrapAlignment.center,
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              _buildMetricChip(
+                                _lang() == 'ar' ? 'التموضع' : 'Tracking',
+                                displaySnapshot.trackingScore,
+                                passed: displaySnapshot.trackingPassed,
+                              ),
+                              _buildMetricChip(
+                                _lang() == 'ar' ? 'الوضعية' : 'Pose',
+                                displaySnapshot.poseScore,
+                                passed: displaySnapshot.posePassed,
+                              ),
+                              _buildMetricChip(
+                                _lang() == 'ar' ? 'العينان' : 'Eyes',
+                                displaySnapshot.eyeActivityScore,
+                                passed: displaySnapshot.eyeActivityPassed,
+                              ),
+                              _buildMetricChip(
+                                _lang() == 'ar' ? 'التنفس' : 'Breath',
+                                displaySnapshot.breathingScore,
+                                passed: displaySnapshot.breathingPassed,
+                              ),
+                              _buildMetricChip(
+                                _lang() == 'ar' ? 'النسيج' : 'Texture',
+                                displaySnapshot.textureScore,
+                                passed: displaySnapshot.texturePassed,
+                              ),
+                              _buildMetricChip(
+                                _lang() == 'ar' ? 'المعالم' : 'Landmarks',
+                                displaySnapshot.landmarkScore,
+                                passed: displaySnapshot.landmarkPassed,
+                              ),
+                              _buildMetricChip(
+                                _lang() == 'ar'
+                                    ? 'مقاومة الانتحال'
+                                    : 'Anti-spoof',
+                                displaySnapshot.antiSpoofScore,
+                                passed: displaySnapshot.antiSpoofPassed,
+                              ),
+                            ],
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -2893,19 +3368,25 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                   child: Container(
                     padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
                     decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.32),
-                      borderRadius: BorderRadius.circular(20),
-                      border:
-                          Border.all(color: Colors.white.withOpacity(0.08)),
+                      color: Colors.white.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: Colors.white.withOpacity(0.18)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.08),
+                          blurRadius: 12,
+                          spreadRadius: 0,
+                        ),
+                      ],
                     ),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         if (_isProcessing || _isVerifyingOnServer)
-                          const Padding(
+                          Padding(
                             padding: EdgeInsets.only(bottom: 12),
                             child:
-                                CircularProgressIndicator(color: Colors.orange),
+                                CircularProgressIndicator(color: effectiveBorderColor),
                           ),
                         Text(
                           _statusMessage,
@@ -2976,6 +3457,57 @@ class _FaceVerificationScreenState extends State<FaceVerificationScreen>
                 ),
               ),
             ),
+            if (_isVerifyingOnServer)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: Container(
+                    color: Colors.black.withOpacity(0.22),
+                    alignment: Alignment.center,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 360),
+                      child: Container(
+                        padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.62),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: Colors.white.withOpacity(0.18),
+                          ),
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            CircularProgressIndicator(
+                              color: effectiveBorderColor,
+                            ),
+                            const SizedBox(height: 12),
+                            Text(
+                              _t('face_processing_in_progress'),
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              _t('face_procedure_recognition_desc'),
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.86),
+                                fontSize: 12,
+                                height: 1.3,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             Positioned(
               top: 50,
               left: 20,
@@ -2995,64 +3527,85 @@ class _FaceGuidePainter extends CustomPainter {
   final bool faceDetected;
   final double readiness;
   final Color color;
+  final double fitScore;
+  final _GuideVisualState state;
 
   _FaceGuidePainter({
     required this.faceDetected,
     required this.readiness,
     required this.color,
+    required this.fitScore,
+    required this.state,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final frameWidth = min(size.width * 0.72, 360.0);
-    final frameHeight = min(size.height * 0.40, frameWidth * 1.12);
+    final frameWidth = min(size.width * 0.78, 390.0);
+    final frameHeight = min(size.height * 0.46, frameWidth * 1.22);
     final rect = Rect.fromCenter(
       center: Offset(size.width / 2, size.height * 0.49),
       width: frameWidth,
       height: frameHeight,
     );
 
-    final glowStrength = readiness.clamp(0.18, 1.0);
+    final glowStrength = max(readiness, fitScore).clamp(0.18, 1.0);
+    final ovalPath = Path()..addOval(rect);
+
+    final overlayPath = Path()
+      ..fillType = PathFillType.evenOdd
+      ..addRect(Offset.zero & size)
+      ..addOval(rect);
+    canvas.drawPath(
+      overlayPath,
+      Paint()..color = Colors.black.withOpacity(0.32),
+    );
+
     final framePaint = Paint()
-      ..color = color
+      ..shader = SweepGradient(
+        colors: [
+          color.withOpacity(0.95),
+          Colors.white.withOpacity(0.80),
+          color.withOpacity(0.95),
+        ],
+      ).createShader(rect)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = faceDetected ? 4.0 : 3.0;
+      ..strokeWidth = faceDetected ? 4.6 : 3.6;
     final glowPaint = Paint()
       ..color = color.withOpacity(0.08 + (glowStrength * 0.10))
       ..style = PaintingStyle.stroke
-      ..strokeWidth = faceDetected ? 14.0 : 10.0
+      ..strokeWidth = faceDetected ? 16.0 : 12.0
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12);
-    final cornerPaint = Paint()
-      ..color = color.withOpacity(0.95)
+    final accentArcPaint = Paint()
+      ..color = (state == _GuideVisualState.ready
+              ? color.withOpacity(0.95)
+              : color.withOpacity(0.70))
+          .withOpacity(faceDetected ? 0.95 : 0.80)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 4.0
+      ..strokeWidth = 4.2
       ..strokeCap = StrokeCap.round;
+    final innerFillPaint = Paint()
+      ..shader = RadialGradient(
+        colors: [
+          color.withOpacity(state == _GuideVisualState.ready ? 0.10 : 0.06),
+          Colors.transparent,
+        ],
+        radius: 0.95,
+      ).createShader(rect);
+    final innerRingPaint = Paint()
+      ..color = Colors.white.withOpacity(0.16)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.4;
 
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(rect.inflate(4), const Radius.circular(24)),
-      glowPaint,
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(rect, const Radius.circular(22)),
-      framePaint,
-    );
+    canvas.drawPath(ovalPath, innerFillPaint);
+    canvas.drawPath(Path()..addOval(rect.inflate(4)), glowPaint);
+    canvas.drawPath(ovalPath, framePaint);
+    canvas.drawPath(Path()..addOval(rect.deflate(10)), innerRingPaint);
 
-    const double cornerLen = 26;
-    final corners = [
-      rect.topLeft,
-      rect.topRight,
-      rect.bottomLeft,
-      rect.bottomRight,
-    ];
-    for (final corner in corners) {
-      final bool isLeft = corner.dx == rect.left;
-      final bool isTop = corner.dy == rect.top;
-      final path = Path()
-        ..moveTo(corner.dx, corner.dy + (isTop ? cornerLen : -cornerLen))
-        ..lineTo(corner.dx, corner.dy)
-        ..lineTo(corner.dx + (isLeft ? cornerLen : -cornerLen), corner.dy);
-      canvas.drawPath(path, cornerPaint);
-    }
+    const double arc = 0.52;
+    canvas.drawArc(rect, -pi / 2 - arc, arc * 0.85, false, accentArcPaint);
+    canvas.drawArc(rect, -pi / 2 + arc * 0.15, arc * 0.85, false, accentArcPaint);
+    canvas.drawArc(rect, pi / 2 - arc, arc * 0.85, false, accentArcPaint);
+    canvas.drawArc(rect, pi / 2 + arc * 0.15, arc * 0.85, false, accentArcPaint);
 
     if (faceDetected) {
       final scannerPaint = Paint()
@@ -3061,20 +3614,14 @@ class _FaceGuidePainter extends CustomPainter {
         ..strokeWidth = 2.0;
       final scannerY =
           rect.top + ((rect.height - 8) * readiness.clamp(0.0, 1.0));
+      canvas.save();
+      canvas.clipPath(ovalPath);
       canvas.drawLine(
-        Offset(rect.left + 12, scannerY),
-        Offset(rect.right - 12, scannerY),
+        Offset(rect.left + 16, scannerY),
+        Offset(rect.right - 16, scannerY),
         scannerPaint,
       );
-
-      final dotPaint = Paint()
-        ..color = Colors.white.withOpacity(0.9)
-        ..style = PaintingStyle.fill;
-      canvas.drawCircle(
-        Offset(rect.center.dx, rect.top - 12),
-        4.5,
-        dotPaint,
-      );
+      canvas.restore();
     }
   }
 
@@ -3082,6 +3629,8 @@ class _FaceGuidePainter extends CustomPainter {
   bool shouldRepaint(covariant _FaceGuidePainter oldDelegate) {
     return oldDelegate.faceDetected != faceDetected ||
         oldDelegate.readiness != readiness ||
-        oldDelegate.color != color;
+        oldDelegate.color != color ||
+        oldDelegate.fitScore != fitScore ||
+        oldDelegate.state != state;
   }
 }

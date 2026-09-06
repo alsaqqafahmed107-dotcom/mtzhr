@@ -1694,13 +1694,65 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
                           color: Colors.black54,
                           borderRadius: BorderRadius.circular(16),
                         ),
-                        child: const Text(
-                          '📸 تسجيل صورة الوجه',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold,
-                          ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _t('face_procedure_enrollment_title'),
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              _t('face_fix_face_now'),
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              _t('face_procedure_enrollment_desc'),
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.85),
+                                fontSize: 12,
+                                height: 1.25,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if (_isProcessing || _isSavingToServer) ...[
+                              const SizedBox(height: 10),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    _t('face_processing_in_progress'),
+                                    style: TextStyle(
+                                      color: Colors.white.withOpacity(0.9),
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ],
                         ),
                       ),
                     ),
@@ -1708,7 +1760,7 @@ class _FaceEnrollmentScreenState extends State<FaceEnrollmentScreen>
                   // ✅ بطاقة ملاحظات الوضع (الموجهة للمستخدم بدلاً من التحديات):
                   if (_poseHintMessage.isNotEmpty)
                     Positioned(
-                      top: 64,
+                      top: 132,
                       left: 12,
                       right: 12,
                       child: Center(

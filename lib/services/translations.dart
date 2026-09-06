@@ -715,6 +715,25 @@ class Translations {
       'rejection_failed': 'فشل في رفض الطلب',
       'face_verification': 'التحقق من الوجه',
       'face_enrollment': 'تسجيل الوجه',
+      'face_procedure_setup_title': 'تجهيز الكاميرا',
+      'face_procedure_setup_desc': 'يتم الآن تجهيز الكاميرا لبدء إجراءات الوجه.',
+      'face_procedure_scan_title': 'فحص الوجه',
+      'face_procedure_scan_desc':
+          'يتم التحقق من الحيوية للتأكد أنك أمام الكاميرا وأن الوجه حقيقي.',
+      'face_procedure_recognition_title': 'التعرف على الوجه',
+      'face_procedure_recognition_desc':
+          'يتم مطابقة وجهك الحالي مع بياناتك المسجلة للتحقق من الهوية.',
+      'face_procedure_enrollment_title': 'تثبيت بيانات الوجه',
+      'face_procedure_enrollment_desc':
+          'هذا الإجراء لحفظ بيانات وجهك لاستخدامها في الحضور والانصراف.',
+      'face_fix_face_now': 'قم بتثبيت وجهك الآن',
+      'face_processing_in_progress': 'عملية قيد التنفيذ',
+      'face_processing_wait': 'يرجى الانتظار وعدم إغلاق الشاشة حتى تكتمل العملية.',
+      'face_challenge_title': 'التحدي المباشر',
+      'face_challenge_progress': 'التحديات: {done}/{required}',
+      'face_guidance_title': 'تعليمات سريعة',
+      'face_show_indicators': 'عرض المؤشرات',
+      'face_hide_indicators': 'إخفاء المؤشرات',
       'face_enrollment_instruction_simple':
           'سيتم التقاط صورة لوجهك تلقائياً عندما يكون وضعك مناسباً. لا تحتاج لفعل أي حركات، فقط انظر مباشرة للكاميرا وعيناك مفتوحتان.',
       'feature_not_available_web': 'هذه الميزة غير متاحة على الويب',
@@ -1555,6 +1574,26 @@ class Translations {
       'rejection_failed': 'Failed to reject request',
       'face_verification': 'Face Verification',
       'face_enrollment': 'Face Enrollment',
+      'face_procedure_setup_title': 'Camera Setup',
+      'face_procedure_setup_desc':
+          'Preparing the camera to start the face procedures.',
+      'face_procedure_scan_title': 'Face Scan',
+      'face_procedure_scan_desc':
+          'Running liveness checks to confirm you are in front of the camera and the face is real.',
+      'face_procedure_recognition_title': 'Face Recognition',
+      'face_procedure_recognition_desc':
+          'Matching your current face with your enrolled data to verify identity.',
+      'face_procedure_enrollment_title': 'Face Data Enrollment',
+      'face_procedure_enrollment_desc':
+          'This step saves your face data so you can use it for attendance.',
+      'face_fix_face_now': 'Hold your face steady now',
+      'face_processing_in_progress': 'Process in progress',
+      'face_processing_wait': 'Please wait and do not close this screen until the process completes.',
+      'face_challenge_title': 'Live Challenge',
+      'face_challenge_progress': 'Challenges: {done}/{required}',
+      'face_guidance_title': 'Quick guidance',
+      'face_show_indicators': 'Show indicators',
+      'face_hide_indicators': 'Hide indicators',
       'face_enrollment_instruction_simple':
           'Your photo will be captured automatically when your pose is correct. No need to perform any actions — just look straight at the camera with your eyes open.',
       'feature_not_available_web': 'This feature is not available on the web',

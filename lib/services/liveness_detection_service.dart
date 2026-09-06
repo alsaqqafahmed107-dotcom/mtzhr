@@ -198,6 +198,7 @@ class LivenessDetectionService {
   static const int _maxFramesBuffer = 72;
   static const int _requiredSignals = _totalSignals;
   static const int _defaultRequiredActiveChallenges = 2;
+  static const int _maxMissingFaceFramesForGrace = 4;
   static const double _blinkThresholdLow = 0.33;
   static const double _blinkThresholdHigh = 0.72;
   static const double _maxYawDegrees = 30.0;
@@ -223,8 +224,10 @@ class LivenessDetectionService {
   DateTime? _sessionStart;
   final Duration _maxSessionDuration = const Duration(seconds: 30);
   LivenessStatus _currentStatus = LivenessStatus.initializing;
+  LivenessStatus? _lastEmittedStatus;
   PassiveLivenessSnapshot _currentSnapshot =
       const PassiveLivenessSnapshot.empty();
+  int _missingFaceFrames = 0;
 
   bool _wasBlinking = false;
   int _blinkCount = 0;
@@ -274,7 +277,9 @@ class LivenessDetectionService {
     _failedChecks.clear();
     _sessionStart = DateTime.now();
     _currentStatus = LivenessStatus.waitingForFace;
+    _lastEmittedStatus = null;
     _currentSnapshot = const PassiveLivenessSnapshot.empty();
+    _missingFaceFrames = 0;
     _wasBlinking = false;
     _blinkCount = 0;
     _lastDepthSpoofRisk = 0.0;
@@ -375,7 +380,10 @@ class LivenessDetectionService {
 
   void _emitStatus() {
     if (!_statusController.isClosed) {
-      _statusController.add(_currentStatus);
+      if (_lastEmittedStatus != _currentStatus) {
+        _lastEmittedStatus = _currentStatus;
+        _statusController.add(_currentStatus);
+      }
     }
   }
 
@@ -401,6 +409,7 @@ class LivenessDetectionService {
     }
 
     if (face == null) {
+      _missingFaceFrames++;
       _frameBuffer.add(LivenessFrameData(
         timestamp: DateTime.now(),
         face: null,
@@ -416,13 +425,16 @@ class LivenessDetectionService {
         landmarkCoverage: 0.0,
       ));
       _trimBuffer();
-      _currentSnapshot = const PassiveLivenessSnapshot.empty();
-      _currentStatus = LivenessStatus.waitingForFace;
-      _emitStatus();
-      _emitProgress();
+      if (_missingFaceFrames >= _maxMissingFaceFramesForGrace) {
+        _currentSnapshot = const PassiveLivenessSnapshot.empty();
+        _currentStatus = LivenessStatus.waitingForFace;
+        _emitStatus();
+        _emitProgress();
+      }
       return;
     }
 
+    _missingFaceFrames = 0;
     _updateBlinkTracking(face);
     _frameBuffer.add(_deriveFrameData(
       face: face,

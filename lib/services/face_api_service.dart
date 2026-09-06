@@ -516,7 +516,7 @@ class FaceApiService {
         body: jsonEncode(body),
       ),
       timeout: timeout,
-      maxAttempts: 2,
+      maxAttempts: 1,
     ));
     // #region debug-point B:verify-request-response
     _reportDebugEvent(
