@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:file_picker/file_picker.dart';
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:provider/provider.dart';
 import '../models/request.dart' as request_models;
@@ -56,6 +55,19 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
   String? _manualPunchType;
   final _manualPunchReasonController = TextEditingController();
 
+  // بيانات طلب تأشيرة خروج وعودة
+  DateTime? _exitReturnFromDate;
+  DateTime? _exitReturnToDate;
+  final _exitReturnReasonController = TextEditingController();
+  final _exitReturnNotesController = TextEditingController();
+
+  // بيانات طلب استئذان
+  DateTime? _permissionDate;
+  TimeOfDay? _permissionFromTime;
+  TimeOfDay? _permissionToTime;
+  final _permissionReasonController = TextEditingController();
+  final _permissionNotesController = TextEditingController();
+
   // بيانات المرفق
   String? _attachmentFileName;
   Uint8List? _attachmentContent;
@@ -89,6 +101,10 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
     _leaveReasonController.dispose();
     _otherDescriptionController.dispose();
     _manualPunchReasonController.dispose();
+    _exitReturnReasonController.dispose();
+    _exitReturnNotesController.dispose();
+    _permissionReasonController.dispose();
+    _permissionNotesController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -199,6 +215,14 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
         case 'ManualPunch':
           requestTypeEnglish = 'ManualPunch';
           break;
+        case 'تأشيرة خروج وعودة':
+        case 'ExitReturn':
+          requestTypeEnglish = 'ExitReturn';
+          break;
+        case 'استئذان':
+        case 'Permission':
+          requestTypeEnglish = 'Permission';
+          break;
         default:
           return;
       }
@@ -255,6 +279,16 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
         _leaveDaysController.clear();
         _leaveReasonController.clear();
         _otherDescriptionController.clear();
+        _manualPunchReasonController.clear();
+        _exitReturnFromDate = null;
+        _exitReturnToDate = null;
+        _exitReturnReasonController.clear();
+        _exitReturnNotesController.clear();
+        _permissionDate = null;
+        _permissionFromTime = null;
+        _permissionToTime = null;
+        _permissionReasonController.clear();
+        _permissionNotesController.clear();
       } else if (value == 'إجازة' || value == 'Leave') {
         _selectedLoanType = null;
         _loanAmountController.clear();
@@ -264,6 +298,16 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
         _loanEndDate = null;
         _loanDescriptionController.clear();
         _otherDescriptionController.clear();
+        _manualPunchReasonController.clear();
+        _exitReturnFromDate = null;
+        _exitReturnToDate = null;
+        _exitReturnReasonController.clear();
+        _exitReturnNotesController.clear();
+        _permissionDate = null;
+        _permissionFromTime = null;
+        _permissionToTime = null;
+        _permissionReasonController.clear();
+        _permissionNotesController.clear();
       } else if (value == 'أخرى' || value == 'Other') {
         _selectedLoanType = null;
         _loanAmountController.clear();
@@ -278,6 +322,15 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
         _leaveDaysController.clear();
         _leaveReasonController.clear();
         _manualPunchReasonController.clear();
+        _exitReturnFromDate = null;
+        _exitReturnToDate = null;
+        _exitReturnReasonController.clear();
+        _exitReturnNotesController.clear();
+        _permissionDate = null;
+        _permissionFromTime = null;
+        _permissionToTime = null;
+        _permissionReasonController.clear();
+        _permissionNotesController.clear();
       } else if (value == 'بصمة حضور وانصراف' || value == 'ManualPunch') {
         _selectedLoanType = null;
         _loanAmountController.clear();
@@ -296,7 +349,64 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
         _manualPunchTime = null;
         _manualPunchType = null;
         _manualPunchReasonController.clear();
+        _exitReturnFromDate = null;
+        _exitReturnToDate = null;
+        _exitReturnReasonController.clear();
+        _exitReturnNotesController.clear();
+        _permissionDate = null;
+        _permissionFromTime = null;
+        _permissionToTime = null;
+        _permissionReasonController.clear();
+        _permissionNotesController.clear();
+      } else if (value == 'تأشيرة خروج وعودة' || value == 'ExitReturn') {
+        _selectedLoanType = null;
+        _loanAmountController.clear();
+        _monthlyInstallmentController.clear();
+        _numberOfInstallmentsController.clear();
+        _loanStartDate = null;
+        _loanEndDate = null;
+        _loanDescriptionController.clear();
+        _selectedLeaveType = null;
+        _leaveStartDate = null;
+        _leaveEndDate = null;
+        _leaveDaysController.clear();
+        _leaveReasonController.clear();
+        _otherDescriptionController.clear();
+        _manualPunchDate = null;
+        _manualPunchTime = null;
+        _manualPunchType = null;
+        _manualPunchReasonController.clear();
+        _permissionDate = null;
+        _permissionFromTime = null;
+        _permissionToTime = null;
+        _permissionReasonController.clear();
+        _permissionNotesController.clear();
+      } else if (value == 'استئذان' || value == 'Permission') {
+        _selectedLoanType = null;
+        _loanAmountController.clear();
+        _monthlyInstallmentController.clear();
+        _numberOfInstallmentsController.clear();
+        _loanStartDate = null;
+        _loanEndDate = null;
+        _loanDescriptionController.clear();
+        _selectedLeaveType = null;
+        _leaveStartDate = null;
+        _leaveEndDate = null;
+        _leaveDaysController.clear();
+        _leaveReasonController.clear();
+        _otherDescriptionController.clear();
+        _manualPunchDate = null;
+        _manualPunchTime = null;
+        _manualPunchType = null;
+        _manualPunchReasonController.clear();
+        _exitReturnFromDate = null;
+        _exitReturnToDate = null;
+        _exitReturnReasonController.clear();
+        _exitReturnNotesController.clear();
       }
+
+      _attachmentFileName = null;
+      _attachmentContent = null;
     });
 
     // جلب المسار تلقائياً
@@ -409,6 +519,130 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
     } catch (e) {
       print('خطأ في اختيار التاريخ: $e');
       _showErrorSnackBar('حدث خطأ في اختيار التاريخ: $e');
+    }
+  }
+
+  Future<void> _selectExitReturnDate(BuildContext context, bool isFrom) async {
+    try {
+      final initialDate = isFrom
+          ? (_exitReturnFromDate ?? DateTime.now())
+          : (_exitReturnToDate ?? (_exitReturnFromDate ?? DateTime.now()));
+      final DateTime? picked = await showDatePicker(
+        context: context,
+        initialDate: initialDate,
+        firstDate: DateTime.now().subtract(const Duration(days: 365)),
+        lastDate: DateTime.now().add(const Duration(days: 365 * 3)),
+        locale: Locale(
+          Provider.of<LanguageService>(context, listen: false)
+              .currentLocale
+              .languageCode,
+        ),
+        builder: (context, child) {
+          return Theme(
+            data: Theme.of(context).copyWith(
+              colorScheme: const ColorScheme.light(
+                primary: Color(0xFF0EA5E9),
+                onPrimary: Colors.white,
+                onSurface: Colors.black,
+              ),
+            ),
+            child: child!,
+          );
+        },
+      );
+
+      if (picked != null) {
+        setState(() {
+          if (isFrom) {
+            _exitReturnFromDate = picked;
+            if (_exitReturnToDate != null &&
+                _exitReturnToDate!.isBefore(picked)) {
+              _exitReturnToDate = null;
+            }
+          } else {
+            _exitReturnToDate = picked;
+          }
+        });
+      }
+    } catch (e) {
+      _showErrorSnackBar('حدث خطأ في اختيار التاريخ: $e');
+    }
+  }
+
+  Future<void> _selectPermissionDate(BuildContext context) async {
+    try {
+      final DateTime? picked = await showDatePicker(
+        context: context,
+        initialDate: _permissionDate ?? DateTime.now(),
+        firstDate: DateTime.now().subtract(const Duration(days: 365)),
+        lastDate: DateTime.now().add(const Duration(days: 365)),
+        locale: Locale(
+          Provider.of<LanguageService>(context, listen: false)
+              .currentLocale
+              .languageCode,
+        ),
+        builder: (context, child) {
+          return Theme(
+            data: Theme.of(context).copyWith(
+              colorScheme: const ColorScheme.light(
+                primary: Color(0xFF0EA5E9),
+                onPrimary: Colors.white,
+                onSurface: Colors.black,
+              ),
+            ),
+            child: child!,
+          );
+        },
+      );
+      if (picked != null) {
+        setState(() {
+          _permissionDate = picked;
+        });
+      }
+    } catch (e) {
+      _showErrorSnackBar('حدث خطأ في اختيار التاريخ: $e');
+    }
+  }
+
+  Future<void> _selectPermissionTime(BuildContext context, bool isFrom) async {
+    try {
+      final picked = await showTimePicker(
+        context: context,
+        initialTime: isFrom
+            ? (_permissionFromTime ?? TimeOfDay.now())
+            : (_permissionToTime ?? (_permissionFromTime ?? TimeOfDay.now())),
+        builder: (context, child) {
+          return Theme(
+            data: Theme.of(context).copyWith(
+              colorScheme: const ColorScheme.light(
+                primary: Color(0xFF0EA5E9),
+                onPrimary: Colors.white,
+                onSurface: Colors.black,
+              ),
+            ),
+            child: child!,
+          );
+        },
+      );
+      if (picked != null) {
+        setState(() {
+          if (isFrom) {
+            _permissionFromTime = picked;
+            if (_permissionToTime != null) {
+              final fromMin = picked.hour * 60 + picked.minute;
+              final toMin =
+                  _permissionToTime!.hour * 60 + _permissionToTime!.minute;
+              if (toMin <= fromMin) {
+                _permissionToTime = null;
+              }
+            }
+          } else {
+            _permissionToTime = picked;
+          }
+        });
+      }
+    } catch (e) {
+      _showErrorSnackBar('حدث خطأ في اختيار الوقت: $e');
     }
   }
 
@@ -563,6 +797,75 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
         print('📦 بيانات الطلب: ${model.toJson()}');
 
         response = await ApiService.createManualPunchRequest(
+          widget.employeeData.clientID,
+          model,
+        );
+      } else if (_selectedRequestType == 'تأشيرة خروج وعودة') {
+        if (_exitReturnFromDate == null) {
+          _showErrorSnackBar('الرجاء اختيار تاريخ البداية');
+          setState(() => _isLoading = false);
+          return;
+        }
+        if (_exitReturnToDate == null) {
+          _showErrorSnackBar('الرجاء اختيار تاريخ النهاية');
+          setState(() => _isLoading = false);
+          return;
+        }
+
+        final model = request_models.ExitReturnRequestCreateModel(
+          requestType: 'ExitReturn',
+          employeeID: widget.employeeData.employeeID,
+          employeeName: widget.employeeData.name,
+          fromDate: _exitReturnFromDate!,
+          toDate: _exitReturnToDate!,
+          reason: _exitReturnReasonController.text.trim(),
+          notes: _exitReturnNotesController.text.trim(),
+          attachmentFileName: _attachmentFileName,
+          attachmentContent: _attachmentContent,
+          createdBy: widget.employeeData.employeeID,
+        );
+
+        response = await ApiService.createExitReturnRequest(
+          widget.employeeData.clientID,
+          model,
+        );
+      } else if (_selectedRequestType == 'استئذان') {
+        if (_permissionDate == null) {
+          _showErrorSnackBar('الرجاء اختيار التاريخ');
+          setState(() => _isLoading = false);
+          return;
+        }
+        if (_permissionFromTime == null) {
+          _showErrorSnackBar('الرجاء اختيار وقت البداية');
+          setState(() => _isLoading = false);
+          return;
+        }
+        if (_permissionToTime == null) {
+          _showErrorSnackBar('الرجاء اختيار وقت النهاية');
+          setState(() => _isLoading = false);
+          return;
+        }
+
+        final fromStr =
+            '${_permissionFromTime!.hour.toString().padLeft(2, '0')}:${_permissionFromTime!.minute.toString().padLeft(2, '0')}';
+        final toStr =
+            '${_permissionToTime!.hour.toString().padLeft(2, '0')}:${_permissionToTime!.minute.toString().padLeft(2, '0')}';
+
+        final model = request_models.PermissionRequestCreateModel(
+          requestType: 'Permission',
+          employeeID: widget.employeeData.employeeID,
+          employeeName: widget.employeeData.name,
+          date: _permissionDate!,
+          fromTimeString: fromStr,
+          toTimeString: toStr,
+          reason: _permissionReasonController.text.trim(),
+          notes: _permissionNotesController.text.trim(),
+          attachmentFileName: _attachmentFileName,
+          attachmentContent: _attachmentContent,
+          createdBy: widget.employeeData.employeeID,
+        );
+
+        response = await ApiService.createPermissionRequest(
           widget.employeeData.clientID,
           model,
         );
@@ -1205,6 +1508,12 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
                     // حقول طلب إضافة بصمة
                     if (_selectedRequestType == 'بصمة حضور وانصراف')
                       _buildManualPunchFieldsCard(lang),
+
+                    if (_selectedRequestType == 'تأشيرة خروج وعودة')
+                      _buildExitReturnFieldsCard(lang),
+
+                    if (_selectedRequestType == 'استئذان')
+                      _buildPermissionFieldsCard(lang),
 
                     // بطاقة المرفقات (لجميع أنواع الطلبات)
                     if (_selectedRequestType != null) _buildAttachmentCard(lang),
@@ -2056,6 +2365,230 @@ class _CreateRequestScreenState extends State<CreateRequestScreen> {
                 }
                 return null;
               },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildExitReturnFieldsCard(String lang) {
+    return Card(
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.flight_takeoff, color: Color(0xFF0EA5E9)),
+                const SizedBox(width: 8),
+                Text(
+                  'تفاصيل تأشيرة خروج وعودة',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            InkWell(
+              onTap: () => _selectExitReturnDate(context, true),
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'من تاريخ',
+                  border: OutlineInputBorder(),
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                ),
+                child: Text(
+                  _exitReturnFromDate != null
+                      ? DateFormat('yyyy-MM-dd').format(_exitReturnFromDate!)
+                      : '-- اختر --',
+                  style: TextStyle(
+                    color:
+                        _exitReturnFromDate != null ? Colors.black87 : Colors.grey,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            InkWell(
+              onTap: () => _selectExitReturnDate(context, false),
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'إلى تاريخ',
+                  border: OutlineInputBorder(),
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                ),
+                child: Text(
+                  _exitReturnToDate != null
+                      ? DateFormat('yyyy-MM-dd').format(_exitReturnToDate!)
+                      : '-- اختر --',
+                  style: TextStyle(
+                    color:
+                        _exitReturnToDate != null ? Colors.black87 : Colors.grey,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _exitReturnReasonController,
+              decoration: const InputDecoration(
+                labelText: 'سبب الطلب',
+                border: OutlineInputBorder(),
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              ),
+              maxLines: 3,
+              validator: (value) {
+                if (_selectedRequestType != 'تأشيرة خروج وعودة') return null;
+                if (_exitReturnFromDate == null) return 'الرجاء اختيار تاريخ البداية';
+                if (_exitReturnToDate == null) return 'الرجاء اختيار تاريخ النهاية';
+                if (value == null || value.trim().isEmpty) {
+                  return 'الرجاء إدخال سبب الطلب';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _exitReturnNotesController,
+              decoration: const InputDecoration(
+                labelText: 'الملاحظات (اختياري)',
+                border: OutlineInputBorder(),
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              ),
+              maxLines: 3,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPermissionFieldsCard(String lang) {
+    return Card(
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.access_time, color: Color(0xFF0EA5E9)),
+                const SizedBox(width: 8),
+                Text(
+                  'تفاصيل الاستئذان',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            InkWell(
+              onTap: () => _selectPermissionDate(context),
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'التاريخ',
+                  border: OutlineInputBorder(),
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                ),
+                child: Text(
+                  _permissionDate != null
+                      ? DateFormat('yyyy-MM-dd').format(_permissionDate!)
+                      : '-- اختر --',
+                  style: TextStyle(
+                    color: _permissionDate != null ? Colors.black87 : Colors.grey,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            InkWell(
+              onTap: () => _selectPermissionTime(context, true),
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'من وقت',
+                  border: OutlineInputBorder(),
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                ),
+                child: Text(
+                  _permissionFromTime != null
+                      ? '${_permissionFromTime!.hour.toString().padLeft(2, '0')}:${_permissionFromTime!.minute.toString().padLeft(2, '0')}'
+                      : '-- اختر --',
+                  style: TextStyle(
+                    color:
+                        _permissionFromTime != null ? Colors.black87 : Colors.grey,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            InkWell(
+              onTap: () => _selectPermissionTime(context, false),
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'إلى وقت',
+                  border: OutlineInputBorder(),
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                ),
+                child: Text(
+                  _permissionToTime != null
+                      ? '${_permissionToTime!.hour.toString().padLeft(2, '0')}:${_permissionToTime!.minute.toString().padLeft(2, '0')}'
+                      : '-- اختر --',
+                  style: TextStyle(
+                    color:
+                        _permissionToTime != null ? Colors.black87 : Colors.grey,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _permissionReasonController,
+              decoration: const InputDecoration(
+                labelText: 'سبب الطلب',
+                border: OutlineInputBorder(),
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              ),
+              maxLines: 3,
+              validator: (value) {
+                if (_selectedRequestType != 'استئذان') return null;
+                if (_permissionDate == null) return 'الرجاء اختيار التاريخ';
+                if (_permissionFromTime == null) return 'الرجاء اختيار وقت البداية';
+                if (_permissionToTime == null) return 'الرجاء اختيار وقت النهاية';
+                if (value == null || value.trim().isEmpty) {
+                  return 'الرجاء إدخال سبب الطلب';
+                }
+                final fromMin = _permissionFromTime!.hour * 60 + _permissionFromTime!.minute;
+                final toMin = _permissionToTime!.hour * 60 + _permissionToTime!.minute;
+                if (toMin <= fromMin) return 'وقت البداية يجب أن يكون قبل وقت النهاية';
+                return null;
+              },
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _permissionNotesController,
+              decoration: const InputDecoration(
+                labelText: 'الملاحظات (اختياري)',
+                border: OutlineInputBorder(),
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              ),
+              maxLines: 3,
             ),
           ],
         ),

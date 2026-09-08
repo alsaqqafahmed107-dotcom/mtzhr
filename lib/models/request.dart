@@ -284,6 +284,93 @@ class ManualPunchRequestCreateModel {
   }
 }
 
+class ExitReturnRequestCreateModel {
+  final String requestType;
+  final int employeeID;
+  final String employeeName;
+  final DateTime fromDate;
+  final DateTime toDate;
+  final String reason;
+  final String? notes;
+  final String? attachmentFileName;
+  final Uint8List? attachmentContent;
+  final int? createdBy;
+
+  ExitReturnRequestCreateModel({
+    required this.requestType,
+    required this.employeeID,
+    required this.employeeName,
+    required this.fromDate,
+    required this.toDate,
+    required this.reason,
+    this.notes,
+    this.attachmentFileName,
+    this.attachmentContent,
+    this.createdBy,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'RequestType': requestType,
+      'EmployeeID': employeeID,
+      'EmployeeName': employeeName,
+      'ExitReturnFromDateString': fromDate.toIso8601String(),
+      'ExitReturnToDateString': toDate.toIso8601String(),
+      'ExitReturnReason': reason,
+      'ExitReturnNotes': notes,
+      'AttachmentFileName': attachmentFileName,
+      'AttachmentContent':
+          attachmentContent != null ? base64Encode(attachmentContent!) : null,
+      'CreatedBy': createdBy,
+    };
+  }
+}
+
+class PermissionRequestCreateModel {
+  final String requestType;
+  final int employeeID;
+  final String employeeName;
+  final DateTime date;
+  final String fromTimeString;
+  final String toTimeString;
+  final String reason;
+  final String? notes;
+  final String? attachmentFileName;
+  final Uint8List? attachmentContent;
+  final int? createdBy;
+
+  PermissionRequestCreateModel({
+    required this.requestType,
+    required this.employeeID,
+    required this.employeeName,
+    required this.date,
+    required this.fromTimeString,
+    required this.toTimeString,
+    required this.reason,
+    this.notes,
+    this.attachmentFileName,
+    this.attachmentContent,
+    this.createdBy,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'RequestType': requestType,
+      'EmployeeID': employeeID,
+      'EmployeeName': employeeName,
+      'PermissionDateString': date.toIso8601String(),
+      'PermissionFromTimeString': fromTimeString,
+      'PermissionToTimeString': toTimeString,
+      'PermissionReason': reason,
+      'PermissionNotes': notes,
+      'AttachmentFileName': attachmentFileName,
+      'AttachmentContent':
+          attachmentContent != null ? base64Encode(attachmentContent!) : null,
+      'CreatedBy': createdBy,
+    };
+  }
+}
+
 // نموذج استجابة إنشاء الطلب
 class RequestCreateResponse {
   final bool success;

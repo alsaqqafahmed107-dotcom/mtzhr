@@ -175,6 +175,10 @@ class _RequestsScreenState extends State<RequestsScreen> {
       return request_models.RequestType.loan;
     } else if (typeName?.contains('إجازة') == true) {
       return request_models.RequestType.leave;
+    } else if (typeName?.contains('تأشيرة خروج وعودة') == true) {
+      return request_models.RequestType.other;
+    } else if (typeName?.contains('استئذان') == true) {
+      return request_models.RequestType.other;
     }
     return request_models.RequestType.other;
   }
@@ -1054,6 +1058,24 @@ class _RequestsScreenState extends State<RequestsScreen> {
         return '${Translations.getText('number_of_days', lang)}:';
       case 'LeaveReason':
         return '${Translations.getText('leave_reason', lang)}:';
+      case 'ExitReturnFromDate':
+        return 'من تاريخ:';
+      case 'ExitReturnToDate':
+        return 'إلى تاريخ:';
+      case 'ExitReturnReason':
+        return 'سبب الطلب:';
+      case 'ExitReturnNotes':
+        return 'الملاحظات:';
+      case 'PermissionDate':
+        return 'التاريخ:';
+      case 'PermissionFromTime':
+        return 'من وقت:';
+      case 'PermissionToTime':
+        return 'إلى وقت:';
+      case 'PermissionReason':
+        return 'سبب الطلب:';
+      case 'PermissionNotes':
+        return 'الملاحظات:';
       default:
         return '$key:';
     }

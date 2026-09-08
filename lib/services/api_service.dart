@@ -1096,6 +1096,122 @@ class ApiService {
     }
   }
 
+  static Future<request_models.RequestCreateResponse> createExitReturnRequest(
+    int clientId,
+    request_models.ExitReturnRequestCreateModel model,
+  ) async {
+    try {
+      _log('🚀 إنشاء طلب تأشيرة خروج وعودة...');
+      _log('🔗 URL: ${ApiConfig.baseUrl}/api/$clientId/requests');
+
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/api/$clientId/requests'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: json.encode(model.toJson()),
+          )
+          .timeout(const Duration(seconds: 30));
+
+      _log('📡 Response Status Code: ${response.statusCode}');
+      _log('📄 Response Body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        _log('✅ تم إنشاء الطلب بنجاح: $data');
+        return request_models.RequestCreateResponse.fromJson(data);
+      } else {
+        _log('❌ خطأ في الاستجابة: ${response.statusCode}');
+        try {
+          final errorData = json.decode(response.body);
+          _log('📋 Error Data: $errorData');
+          return request_models.RequestCreateResponse(
+            success: false,
+            message: errorData['Message'] ?? 'حدث خطأ في إنشاء الطلب',
+          );
+        } catch (_) {
+          return request_models.RequestCreateResponse(
+            success: false,
+            message: 'حدث خطأ في الخادم (${response.statusCode})',
+          );
+        }
+      }
+    } on http.ClientException catch (e) {
+      _log('💥 خطأ في العميل (ClientException): $e');
+      return request_models.RequestCreateResponse(
+        success: false,
+        message:
+            'خطأ في الاتصال بالخادم. تأكد من أن الخادم يعمل وأن العنوان صحيح.',
+      );
+    } on Exception catch (e) {
+      _log('💥 خطأ عام: $e');
+      return request_models.RequestCreateResponse(
+        success: false,
+        message: 'خطأ في الاتصال: $e',
+      );
+    }
+  }
+
+  static Future<request_models.RequestCreateResponse> createPermissionRequest(
+    int clientId,
+    request_models.PermissionRequestCreateModel model,
+  ) async {
+    try {
+      _log('🚀 إنشاء طلب استئذان...');
+      _log('🔗 URL: ${ApiConfig.baseUrl}/api/$clientId/requests');
+
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}/api/$clientId/requests'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: json.encode(model.toJson()),
+          )
+          .timeout(const Duration(seconds: 30));
+
+      _log('📡 Response Status Code: ${response.statusCode}');
+      _log('📄 Response Body: ${response.body}');
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        _log('✅ تم إنشاء الطلب بنجاح: $data');
+        return request_models.RequestCreateResponse.fromJson(data);
+      } else {
+        _log('❌ خطأ في الاستجابة: ${response.statusCode}');
+        try {
+          final errorData = json.decode(response.body);
+          _log('📋 Error Data: $errorData');
+          return request_models.RequestCreateResponse(
+            success: false,
+            message: errorData['Message'] ?? 'حدث خطأ في إنشاء الطلب',
+          );
+        } catch (_) {
+          return request_models.RequestCreateResponse(
+            success: false,
+            message: 'حدث خطأ في الخادم (${response.statusCode})',
+          );
+        }
+      }
+    } on http.ClientException catch (e) {
+      _log('💥 خطأ في العميل (ClientException): $e');
+      return request_models.RequestCreateResponse(
+        success: false,
+        message:
+            'خطأ في الاتصال بالخادم. تأكد من أن الخادم يعمل وأن العنوان صحيح.',
+      );
+    } on Exception catch (e) {
+      _log('💥 خطأ عام: $e');
+      return request_models.RequestCreateResponse(
+        success: false,
+        message: 'خطأ في الاتصال: $e',
+      );
+    }
+  }
+
   // جلب أنواع السلف
   static Future<List<request_models.LoanType>> getLoanTypes(
       int clientId) async {
@@ -2619,6 +2735,157 @@ class ApiService {
         'success': false,
         'message': 'خطأ في الاتصال: $e',
       };
+    }
+  }
+
+  static Future<Map<String, dynamic>> getUserTasks(
+    int clientId, {
+    required int employeeId,
+    String? status,
+    int page = 1,
+    int pageSize = 50,
+  }) async {
+    try {
+      final qs = <String, String>{
+        'employeeId': employeeId.toString(),
+        'page': page.toString(),
+        'pageSize': pageSize.toString(),
+      };
+      if (status != null && status.trim().isNotEmpty) {
+        qs['status'] = status.trim();
+      }
+
+      final uri = Uri.parse('${ApiConfig.baseUrl}/api/$clientId/user-tasks')
+          .replace(queryParameters: qs);
+
+      final response = await http.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final decoded = json.decode(response.body);
+        return {
+          'Success': decoded['Success'] == true,
+          'Message': decoded['Message']?.toString(),
+          'Data': decoded['Data'] ?? [],
+        };
+      }
+
+      return {
+        'Success': false,
+        'Message': 'فشل في جلب المهام: ${response.statusCode}',
+        'Data': [],
+      };
+    } catch (e) {
+      return {
+        'Success': false,
+        'Message': 'خطأ في الاتصال: $e',
+        'Data': [],
+      };
+    }
+  }
+
+  static Future<Map<String, dynamic>> getUserTaskDetails(
+    int clientId, {
+    required int employeeId,
+    required int taskId,
+  }) async {
+    try {
+      final uri = Uri.parse('${ApiConfig.baseUrl}/api/$clientId/user-tasks/$taskId')
+          .replace(queryParameters: {'employeeId': employeeId.toString()});
+
+      final response = await http.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final decoded = json.decode(response.body);
+        return {
+          'Success': decoded['Success'] == true,
+          'Message': decoded['Message']?.toString(),
+          'Data': decoded['Data'],
+        };
+      }
+
+      return {
+        'Success': false,
+        'Message': 'فشل في جلب تفاصيل المهمة: ${response.statusCode}',
+        'Data': null,
+      };
+    } catch (e) {
+      return {
+        'Success': false,
+        'Message': 'خطأ في الاتصال: $e',
+        'Data': null,
+      };
+    }
+  }
+
+  static Future<Map<String, dynamic>> updateUserTaskStatus(
+    int clientId, {
+    required int employeeId,
+    required int taskId,
+    required String status,
+  }) async {
+    try {
+      final uri = Uri.parse(
+              '${ApiConfig.baseUrl}/api/$clientId/user-tasks/$taskId/status')
+          .replace(queryParameters: {'employeeId': employeeId.toString()});
+
+      final response = await http.put(
+        uri,
+        headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+        body: json.encode({'Status': status}),
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final decoded = json.decode(response.body);
+        return {
+          'Success': decoded['Success'] == true,
+          'Message': decoded['Message']?.toString(),
+          'Data': decoded['Data'],
+        };
+      }
+
+      return {
+        'Success': false,
+        'Message': 'فشل في تحديث حالة المهمة: ${response.statusCode}',
+        'Data': null,
+      };
+    } catch (e) {
+      return {
+        'Success': false,
+        'Message': 'خطأ في الاتصال: $e',
+        'Data': null,
+      };
+    }
+  }
+
+  static Future<Map<String, dynamic>> downloadUserTaskAttachment(
+    int clientId, {
+    required int employeeId,
+    required int taskId,
+    required int attachmentId,
+  }) async {
+    try {
+      final uri = Uri.parse(
+              '${ApiConfig.baseUrl}/api/$clientId/user-tasks/$taskId/attachments/$attachmentId/download')
+          .replace(queryParameters: {'employeeId': employeeId.toString()});
+
+      final response = await http.get(
+        uri,
+        headers: {'Accept': 'application/octet-stream'},
+      ).timeout(const Duration(seconds: 60));
+
+      if (response.statusCode == 200) {
+        return {'Success': true, 'Data': response.bodyBytes, 'Message': 'تم التحميل بنجاح'};
+      }
+
+      return {'Success': false, 'Data': null, 'Message': 'فشل في تحميل المرفق: ${response.statusCode}'};
+    } catch (e) {
+      return {'Success': false, 'Data': null, 'Message': 'خطأ في الاتصال: $e'};
     }
   }
 }

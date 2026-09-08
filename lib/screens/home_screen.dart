@@ -25,6 +25,7 @@ import 'notifications_screen.dart';
 import 'payroll_screen.dart';
 import 'shift_info_screen.dart';
 import 'salary_details_screen.dart';
+import 'user_tasks_screen.dart';
 import '../widgets/responsive_center.dart';
 import '../theme/app_semantic_colors.dart';
 
@@ -1370,6 +1371,23 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                     ),
+                  ),
+                  _buildActionCard(
+                    title: Translations.getText('tasks_title', lang),
+                    icon: Icons.task_alt_rounded,
+                    color: scheme.primary,
+                    onTap: () async {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => UserTasksScreen(
+                            clientId: widget.employeeData!.clientID,
+                            employeeId: widget.employeeData!.employeeID,
+                          ),
+                        ),
+                      );
+                      _loadAllData();
+                    },
                   ),
                 ],
               );
