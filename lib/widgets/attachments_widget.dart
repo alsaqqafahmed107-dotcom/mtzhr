@@ -102,8 +102,8 @@ class AttachmentsWidget extends StatelessWidget {
 
   Widget _buildAttachmentTile(
       Map<String, dynamic> attachment, BuildContext context, String lang) {
-    final fileName =
-        attachment['FileName'] ?? Translations.getText('file_not_specified', lang);
+    final fileName = attachment['FileName'] ??
+        Translations.getText('file_not_specified', lang);
     final fileType = (attachment['FileType'] ?? '').toString().toLowerCase();
     final fileSize = attachment['FormattedFileSize'] ?? '';
     final createdDate = attachment['CreatedDate'] ?? '';
@@ -199,8 +199,9 @@ class AttachmentsWidget extends StatelessWidget {
 
   Widget _buildActionButtons(
       Map<String, dynamic> attachment, BuildContext context) {
-    final lang =
-        Provider.of<LanguageService>(context, listen: false).currentLocale.languageCode;
+    final lang = Provider.of<LanguageService>(context, listen: false)
+        .currentLocale
+        .languageCode;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -222,8 +223,9 @@ class AttachmentsWidget extends StatelessWidget {
 
   Future<void> _openAttachment(
       Map<String, dynamic> attachment, BuildContext context) async {
-    final lang =
-        Provider.of<LanguageService>(context, listen: false).currentLocale.languageCode;
+    final lang = Provider.of<LanguageService>(context, listen: false)
+        .currentLocale
+        .languageCode;
     try {
       final fileName = attachment['FileName'] as String? ??
           Translations.getText('file_not_specified', lang);
@@ -418,8 +420,9 @@ class AttachmentsWidget extends StatelessWidget {
 
   Future<void> _downloadAttachment(
       Map<String, dynamic> attachment, BuildContext context) async {
-    final lang =
-        Provider.of<LanguageService>(context, listen: false).currentLocale.languageCode;
+    final lang = Provider.of<LanguageService>(context, listen: false)
+        .currentLocale
+        .languageCode;
     try {
       final fileName = attachment['FileName'] as String? ??
           Translations.getText('file_not_specified', lang);
@@ -638,7 +641,7 @@ class AttachmentsWidget extends StatelessWidget {
         try {
           // محاولة الحصول على مجلد التحميلات
           downloadsDir = await getExternalStorageDirectory();
-          
+
           if (downloadsDir == null) {
             print('❌ فشل في الحصول على مجلد التحميلات');
             return {
@@ -684,7 +687,7 @@ class AttachmentsWidget extends StatelessWidget {
               'Message': 'فشل في حفظ الملف',
             };
           }
-                } catch (e) {
+        } catch (e) {
           print('❌ خطأ في حفظ الملف: $e');
           return {
             'Success': false,
@@ -749,7 +752,7 @@ class AttachmentsWidget extends StatelessWidget {
 
             final fileName = file.path.split('/').last;
             final uri = Uri.parse(
-                'content://com.example.mtzhr.fileprovider/$pathType/$fileName');
+                'content://com.perfectsolutions.mtzhr.fileprovider/$pathType/$fileName');
             print('🔗 تم إنشاء FileProvider URI: $uri');
             return uri;
           } catch (e) {
@@ -843,9 +846,10 @@ class AttachmentDetailDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final lang = Provider.of<LanguageService>(context).currentLocale.languageCode;
-    final fileName =
-        attachment['FileName'] ?? Translations.getText('file_not_specified', lang);
+    final lang =
+        Provider.of<LanguageService>(context).currentLocale.languageCode;
+    final fileName = attachment['FileName'] ??
+        Translations.getText('file_not_specified', lang);
     final fileType = attachment['FileType'] ?? '';
     final fileSize = attachment['FormattedFileSize'] ?? '';
     final createdDate = attachment['CreatedDate'] ?? '';
