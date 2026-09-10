@@ -94,6 +94,10 @@
 			<string>fetch</string>
 			<string>processing</string>
 		</array>
+		<key>BGTaskSchedulerPermittedIdentifiers</key>
+		<array>
+			<string>com.perfectsolutions.mtzhr.refreshTask</string>
+		</array>
 		
 		<!-- Notification Permissions -->
 		<key>UNUserNotificationCenter</key>
