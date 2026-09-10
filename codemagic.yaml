@@ -8,7 +8,7 @@ workflows:
       - name: Get dependencies
         script: flutter pub get
       - name: Build iOS release for device
-        script: flutter build ios --release --no-codesign --build-number=$BUILD_NUMBER
+        script: flutter build ios --release --no-codesign --build-number=$CM_BUILD_NUMBER
     artifacts:
       - build/ios/iphoneos/*.app
 
