@@ -7,6 +7,7 @@ import '../services/translations.dart';
 import 'login_screen.dart';
 import 'employee_full_info_screen.dart';
 import 'change_password_screen.dart';
+import 'task_creator_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   final Employee employee;
@@ -278,6 +279,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   builder: (context) => ChangePasswordScreen(
                     email: widget.employee.email,
                     clientId: widget.clientId,
+                  ),
+                ),
+              );
+            },
+          ),
+          _buildActionTile(
+            Translations.getText('task_creator_title', lang),
+            Icons.playlist_add_check_rounded,
+            () {
+              final creatorEmployeeId =
+                  int.tryParse(widget.employee.employeeNumber) ??
+                      int.tryParse(widget.employee.id) ??
+                      0;
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => TaskCreatorScreen(
+                    clientId: widget.clientId,
+                    creatorEmployeeId: creatorEmployeeId,
                   ),
                 ),
               );

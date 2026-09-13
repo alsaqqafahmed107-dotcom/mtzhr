@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart' as http_parser;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/api_config.dart';
@@ -15,6 +16,8 @@ import '../models/employee_full_info.dart';
 import '../models/work_info_models.dart';
 import '../models/location.dart';
 import '../models/salary_details.dart';
+import '../models/mobile_advertisement.dart';
+import '../models/app_notice.dart';
 
 
 class ApiService {
@@ -1889,6 +1892,103 @@ class ApiService {
     }
   }
 
+  static Future<List<MobileAdvertisement>> getActiveMobileAdvertisements(
+      int clientId) async {
+    try {
+      final uri = Uri.parse('${ApiConfig.baseUrl}/api/$clientId/ads/active');
+      _log('🚀 جلب إعلانات التطبيق...');
+      _log('🔗 URL: $uri');
+
+      final response = await http
+          .get(
+            uri,
+            headers: ApiConfig.headers,
+          )
+          .timeout(const Duration(seconds: 20));
+
+      _log('📡 Response Status Code: ${response.statusCode}');
+
+      if (response.statusCode != 200) {
+        return [];
+      }
+
+      final decoded = json.decode(response.body);
+      if (decoded is Map<String, dynamic>) {
+        final data = decoded['Data'];
+        if (data is List) {
+          return data
+              .whereType<Map>()
+              .map((e) =>
+                  MobileAdvertisement.fromJson(Map<String, dynamic>.from(e)))
+              .toList();
+        }
+        return [];
+      }
+
+      if (decoded is List) {
+        return decoded
+            .whereType<Map>()
+            .map((e) => MobileAdvertisement.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+      }
+
+      return [];
+    } catch (e) {
+      _log('💥 خطأ في getActiveMobileAdvertisements: $e');
+      return [];
+    }
+  }
+
+  static Future<List<AppNotice>> getActiveAppNotices({
+    required String placement,
+  }) async {
+    try {
+      final base = Uri.parse('${ApiConfig.baseUrl}/api/app-notices/active');
+      final uri = base.replace(queryParameters: {
+        'placement': placement.trim(),
+      });
+      _log('🚀 جلب تنبيهات التطبيق...');
+      _log('🔗 URL: $uri');
+
+      final response = await http
+          .get(
+            uri,
+            headers: ApiConfig.headers,
+          )
+          .timeout(const Duration(seconds: 20));
+
+      _log('📡 Response Status Code: ${response.statusCode}');
+
+      if (response.statusCode != 200) {
+        return [];
+      }
+
+      final decoded = json.decode(response.body);
+      if (decoded is Map<String, dynamic>) {
+        final data = decoded['Data'];
+        if (data is List) {
+          return data
+              .whereType<Map>()
+              .map((e) => AppNotice.fromJson(Map<String, dynamic>.from(e)))
+              .toList();
+        }
+        return [];
+      }
+
+      if (decoded is List) {
+        return decoded
+            .whereType<Map>()
+            .map((e) => AppNotice.fromJson(Map<String, dynamic>.from(e)))
+            .toList();
+      }
+
+      return [];
+    } catch (e) {
+      _log('💥 خطأ في getActiveAppNotices: $e');
+      return [];
+    }
+  }
+
   // تغيير كلمة المرور
   Future<Map<String, dynamic>> changePassword({
     required int clientId,
@@ -2886,6 +2986,250 @@ class ApiService {
       return {'Success': false, 'Data': null, 'Message': 'فشل في تحميل المرفق: ${response.statusCode}'};
     } catch (e) {
       return {'Success': false, 'Data': null, 'Message': 'خطأ في الاتصال: $e'};
+    }
+  }
+
+  static Future<Map<String, dynamic>> getTaskCreatorManagedEmployees(
+    int clientId, {
+    required int creatorEmployeeId,
+  }) async {
+    try {
+      final uri = Uri.parse(
+          '${ApiConfig.baseUrl}/api/$clientId/task-creators/$creatorEmployeeId/managed-employees');
+
+      final response = await http.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final decoded = json.decode(response.body);
+        return {
+          'Success': decoded['Success'] == true,
+          'Message': decoded['Message']?.toString(),
+          'Data': decoded['Data'] ?? [],
+          'Permission': decoded['Permission'],
+        };
+      }
+
+      return {
+        'Success': false,
+        'Message': 'فشل في جلب الموظفين: ${response.statusCode}',
+        'Data': [],
+      };
+    } catch (e) {
+      return {
+        'Success': false,
+        'Message': 'خطأ في الاتصال: $e',
+        'Data': [],
+      };
+    }
+  }
+
+  static Future<Map<String, dynamic>> createTaskAsCreator(
+    int clientId, {
+    required int creatorEmployeeId,
+    required String title,
+    String? description,
+    required DateTime dueDateTime,
+    required List<int> assignedEmployeeIds,
+  }) async {
+    try {
+      final uri = Uri.parse(
+          '${ApiConfig.baseUrl}/api/$clientId/task-creators/$creatorEmployeeId/tasks');
+
+      final payload = <String, dynamic>{
+        'Title': title.trim(),
+        'Description': (description ?? '').trim(),
+        'DueDateTime':
+            '${dueDateTime.year.toString().padLeft(4, '0')}-${dueDateTime.month.toString().padLeft(2, '0')}-${dueDateTime.day.toString().padLeft(2, '0')} ${dueDateTime.hour.toString().padLeft(2, '0')}:${dueDateTime.minute.toString().padLeft(2, '0')}',
+        'AssignedEmployeeIDs': assignedEmployeeIds,
+      };
+
+      final response = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+        body: json.encode(payload),
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final decoded = json.decode(response.body);
+        return {
+          'Success': decoded['Success'] == true,
+          'Message': decoded['Message']?.toString(),
+          'CreatedTaskIDs': decoded['CreatedTaskIDs'] ?? [],
+        };
+      }
+
+      return {
+        'Success': false,
+        'Message': 'فشل في إنشاء المهمة: ${response.statusCode}',
+        'CreatedTaskIDs': [],
+      };
+    } catch (e) {
+      return {
+        'Success': false,
+        'Message': 'خطأ في الاتصال: $e',
+        'CreatedTaskIDs': [],
+      };
+    }
+  }
+
+  static Future<Map<String, dynamic>> uploadCreatorTaskAttachment(
+    int clientId, {
+    required int creatorEmployeeId,
+    required int taskId,
+    required String fileName,
+    required List<int> bytes,
+    String? contentType,
+  }) async {
+    try {
+      final uri = Uri.parse(
+          '${ApiConfig.baseUrl}/api/$clientId/task-creators/$creatorEmployeeId/tasks/$taskId/attachments');
+
+      final req = http.MultipartRequest('POST', uri);
+      req.headers['Accept'] = 'application/json';
+      if (contentType != null && contentType.trim().isNotEmpty) {
+        req.files.add(
+          http.MultipartFile.fromBytes(
+            'file',
+            bytes,
+            filename: fileName,
+            contentType: http_parser.MediaType.parse(contentType),
+          ),
+        );
+      } else {
+        req.files.add(
+          http.MultipartFile.fromBytes(
+            'file',
+            bytes,
+            filename: fileName,
+          ),
+        );
+      }
+
+      final streamed = await req.send().timeout(const Duration(seconds: 60));
+      final response = await http.Response.fromStream(streamed);
+
+      if (response.statusCode == 200) {
+        final decoded = json.decode(response.body);
+        return {
+          'Success': decoded['Success'] == true,
+          'Message': decoded['Message']?.toString(),
+          'AttachmentID': decoded['AttachmentID'],
+        };
+      }
+
+      return {
+        'Success': false,
+        'Message': 'فشل في رفع المرفق: ${response.statusCode}',
+      };
+    } catch (e) {
+      return {'Success': false, 'Message': 'خطأ في الاتصال: $e'};
+    }
+  }
+
+  static Future<Map<String, dynamic>> getCreatorTasks(
+    int clientId, {
+    required int creatorEmployeeId,
+    String? status,
+    int page = 1,
+    int pageSize = 50,
+  }) async {
+    try {
+      final qs = <String, String>{
+        'page': page.toString(),
+        'pageSize': pageSize.toString(),
+      };
+      if (status != null && status.trim().isNotEmpty) {
+        qs['status'] = status.trim();
+      }
+
+      final uri = Uri.parse(
+              '${ApiConfig.baseUrl}/api/$clientId/task-creators/$creatorEmployeeId/tasks')
+          .replace(queryParameters: qs);
+
+      final response = await http.get(
+        uri,
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final decoded = json.decode(response.body);
+        return {
+          'Success': decoded['Success'] == true,
+          'Message': decoded['Message']?.toString(),
+          'Data': decoded['Data'] ?? [],
+        };
+      }
+
+      return {
+        'Success': false,
+        'Message': 'فشل في جلب المهام: ${response.statusCode}',
+        'Data': [],
+      };
+    } catch (e) {
+      return {
+        'Success': false,
+        'Message': 'خطأ في الاتصال: $e',
+        'Data': [],
+      };
+    }
+  }
+
+  static Future<Map<String, dynamic>> approveCreatorTask(
+    int clientId, {
+    required int creatorEmployeeId,
+    required int taskId,
+  }) async {
+    try {
+      final uri = Uri.parse(
+          '${ApiConfig.baseUrl}/api/$clientId/task-creators/$creatorEmployeeId/tasks/$taskId/approve');
+
+      final response = await http.put(
+        uri,
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final decoded = json.decode(response.body);
+        return {
+          'Success': decoded['Success'] == true,
+          'Message': decoded['Message']?.toString(),
+        };
+      }
+
+      return {'Success': false, 'Message': 'فشل في اعتماد المهمة: ${response.statusCode}'};
+    } catch (e) {
+      return {'Success': false, 'Message': 'خطأ في الاتصال: $e'};
+    }
+  }
+
+  static Future<Map<String, dynamic>> cancelCreatorTask(
+    int clientId, {
+    required int creatorEmployeeId,
+    required int taskId,
+  }) async {
+    try {
+      final uri = Uri.parse(
+          '${ApiConfig.baseUrl}/api/$clientId/task-creators/$creatorEmployeeId/tasks/$taskId/cancel');
+
+      final response = await http.put(
+        uri,
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 30));
+
+      if (response.statusCode == 200) {
+        final decoded = json.decode(response.body);
+        return {
+          'Success': decoded['Success'] == true,
+          'Message': decoded['Message']?.toString(),
+        };
+      }
+
+      return {'Success': false, 'Message': 'فشل في إلغاء المهمة: ${response.statusCode}'};
+    } catch (e) {
+      return {'Success': false, 'Message': 'خطأ في الاتصال: $e'};
     }
   }
 }

@@ -20,6 +20,8 @@ import '../utils/platform_helper.dart';
 import '../services/api_service.dart';
 import '../services/face_api_service.dart';
 import 'face_enrollment_screen.dart';
+import '../models/app_notice.dart';
+import '../widgets/app_notice_banner.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -40,6 +42,7 @@ class _LoginScreenState extends State<LoginScreen>
   bool _showPassword = false;
   bool _isLoading = false;
   String? _errorMessage;
+  AppNotice? _loginNotice;
 
   // معلومات الجهاز
   String _deviceUUID = '';
@@ -157,6 +160,7 @@ class _LoginScreenState extends State<LoginScreen>
     // تحميل البيانات المحفوظة وجلب معلومات الجهاز
     _loadSavedCredentials();
     _getDeviceInfo();
+    _loadLoginNotice();
   }
 
   @override
@@ -168,6 +172,17 @@ class _LoginScreenState extends State<LoginScreen>
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadLoginNotice() async {
+    try {
+      final notices =
+          await ApiService.getActiveAppNotices(placement: 'login');
+      if (!mounted) return;
+      setState(() {
+        _loginNotice = notices.isNotEmpty ? notices.first : null;
+      });
+    } catch (_) {}
   }
 
   // دالة تحميل البيانات المحفوظة
@@ -625,6 +640,14 @@ class _LoginScreenState extends State<LoginScreen>
                 child: ResponsiveCenter(
                   child: Column(
                     children: [
+                      if (_loginNotice != null)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 64, 16, 0),
+                          child: AppNoticeBanner(
+                            notice: _loginNotice!,
+                            lang: lang,
+                          ),
+                        ),
                       _buildLogoSection(lang),
                       _buildLoginSection(lang),
                     ],

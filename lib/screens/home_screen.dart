@@ -9,6 +9,8 @@ import '../models/request.dart' as request_models;
 import '../models/employee_full_info.dart';
 import '../models/shift.dart';
 import '../models/notification_model.dart';
+import '../models/mobile_advertisement.dart';
+import '../models/app_notice.dart';
 
 import '../services/api_service.dart';
 import '../services/language_service.dart';
@@ -26,7 +28,10 @@ import 'payroll_screen.dart';
 import 'shift_info_screen.dart';
 import 'salary_details_screen.dart';
 import 'user_tasks_screen.dart';
+import 'task_creator_screen.dart';
 import '../widgets/responsive_center.dart';
+import '../widgets/ads_slider.dart';
+import '../widgets/app_notice_banner.dart';
 import '../theme/app_semantic_colors.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -59,6 +64,10 @@ class _HomeScreenState extends State<HomeScreen> {
   int _myPendingRequestsCount = 0;
   SecureApprovalPermission? _cachedApprovalPermission;
   bool _hasApprovalAccess = false;
+  bool _hasTaskCreatorAccess = false;
+  int _managedEmployeesCount = 0;
+  List<MobileAdvertisement> _mobileAds = [];
+  AppNotice? _homeNotice;
   bool _isLoadingDashboard = false;
 
   // دالة تسجيل الأحداث للتطوير
@@ -66,6 +75,14 @@ class _HomeScreenState extends State<HomeScreen> {
     if (kDebugMode) {
       print(message);
     }
+  }
+
+  bool _asBool(dynamic v) {
+    if (v == null) return false;
+    if (v is bool) return v;
+    if (v is num) return v != 0;
+    final s = v.toString().trim().toLowerCase();
+    return s == 'true' || s == '1' || s == 'yes' || s == 'y';
   }
 
   bool _hasShownExpiryWarning = false;
@@ -122,6 +139,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final employeeNumber = widget.employeeData!.employeeNumber;
       final email = widget.employeeData!.email;
       final rules = (widget.employeeData?.rules ?? '').toLowerCase();
+      final creatorIdForApi = int.tryParse(employeeNumber) ?? empId;
 
       var effectivePermission = ApprovalPermissionService.currentCached;
       final embeddedFromEmployee = widget.employeeData?.embeddedApprovalPermission;
@@ -203,6 +221,24 @@ class _HomeScreenState extends State<HomeScreen> {
             .catchError((e) {
           _log('Error fetching shifts: $e');
           return <ShiftData>[];
+        }),
+
+        ApiService.getTaskCreatorManagedEmployees(
+          clientId,
+          creatorEmployeeId: creatorIdForApi,
+        ).catchError((e) {
+          _log('Error fetching task creator access: $e');
+          return {'Success': false, 'Data': [], 'Permission': null};
+        }),
+
+        ApiService.getActiveMobileAdvertisements(clientId).catchError((e) {
+          _log('Error fetching mobile ads: $e');
+          return <MobileAdvertisement>[];
+        }),
+
+        ApiService.getActiveAppNotices(placement: 'home').catchError((e) {
+          _log('Error fetching app notices: $e');
+          return <AppNotice>[];
         }),
       ]);
 
@@ -317,6 +353,19 @@ class _HomeScreenState extends State<HomeScreen> {
         }
 
         _shifts = (results[6] as List).whereType<ShiftData>().toList();
+
+        final taskCreatorResp = results[7] as Map<String, dynamic>;
+        final taskOk = taskCreatorResp['Success'] == true;
+        final List taskData = (taskCreatorResp['Data'] as List?) ?? const [];
+        final perm = taskCreatorResp['Permission'];
+        final canCreate = perm is Map && _asBool(perm['CanCreate']);
+        _hasTaskCreatorAccess = taskOk && canCreate;
+        _managedEmployeesCount = taskOk ? taskData.length : 0;
+
+        _mobileAds =
+            (results[8] as List).whereType<MobileAdvertisement>().toList();
+        final notices = (results[9] as List).whereType<AppNotice>().toList();
+        _homeNotice = notices.isNotEmpty ? notices.first : null;
 
         _isLoadingDashboard = false;
       });
@@ -910,10 +959,22 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (_homeNotice != null) ...[
+                  AppNoticeBanner(
+                    notice: _homeNotice!,
+                    lang: lang,
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 _buildWelcomeCard(lang),
                 const SizedBox(height: 24),
                 _buildAttendanceCard(lang),
-                const SizedBox(height: 24),
+                if (_mobileAds.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  AdsSlider(ads: _mobileAds),
+                  const SizedBox(height: 24),
+                ] else
+                  const SizedBox(height: 24),
                 _buildQuickActions(lang),
                 const SizedBox(height: 24),
                 _buildWorkCalendar(lang),
@@ -1238,163 +1299,216 @@ class _HomeScreenState extends State<HomeScreen> {
       secureIsApprover = widget.employeeData!.isApprover;
     }
     final showApprovalsCard = secureIsApprover && _hasApprovalAccess;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const childAspectRatio = 0.88;
+        const horizontalSpacing = 16.0;
+        const verticalSpacing = 16.0;
 
-    return _buildBorderedSectionCard(
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: scheme.primaryContainer.withValues(alpha: 0.55),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: scheme.primary.withValues(alpha: 0.22),
-                    width: 1,
+        Widget buildGroupSectionCard({
+          required String title,
+          required List<Widget> actions,
+        }) {
+          return _buildBorderedSectionCard(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+            margin: EdgeInsets.zero,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Align(
+                  alignment: Alignment.center,
+                  child: Text(
+                    title,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: scheme.onSurface,
+                        ),
                   ),
                 ),
-                child: Icon(
-                  Icons.dashboard_customize_rounded,
-                  size: 20,
-                  color: scheme.primary,
+                const SizedBox(height: 16),
+                GridView.count(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  crossAxisCount: 2,
+                  crossAxisSpacing: horizontalSpacing,
+                  mainAxisSpacing: verticalSpacing,
+                  childAspectRatio: childAspectRatio,
+                  children: actions,
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  Translations.getText('quick_actions', lang),
-                  style: Theme.of(context)
-                      .textTheme
-                      .headlineSmall
-                      ?.copyWith(fontWeight: FontWeight.bold),
+              ],
+            ),
+          );
+        }
+
+        final attendanceAndShiftsActions = <Widget>[
+          _buildActionCard(
+            title: Translations.getText('attendance_history', lang),
+            icon: Icons.history,
+            color: semantic.success,
+            onTap: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => AttendanceHistoryScreen(
+                    employeeNumber: _currentEmployee!.employeeNumber,
+                    clientId: widget.employeeData?.clientID ?? 30,
+                    employeeName: _currentEmployee!.name,
+                  ),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 20),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              const crossAxisCount = 2;
-              const childAspectRatio = 0.88;
-              const horizontalSpacing = 16.0;
-              const verticalSpacing = 16.0;
-              return GridView.count(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                crossAxisCount: crossAxisCount,
-                crossAxisSpacing: horizontalSpacing,
-                mainAxisSpacing: verticalSpacing,
-                childAspectRatio: childAspectRatio,
-                children: [
-                  _buildActionCard(
-                    title: Translations.getText('my_requests', lang),
-                    icon: Icons.assignment,
-                    color: scheme.primary,
-                    badgeCount: ((_pendingCounts?.loan ?? 0) +
-                                (_pendingCounts?.leave ?? 0) +
-                                (_pendingCounts?.other ?? 0)) >
-                            _myPendingRequestsCount
-                        ? ((_pendingCounts?.loan ?? 0) +
-                            (_pendingCounts?.leave ?? 0) +
-                            (_pendingCounts?.other ?? 0))
-                        : _myPendingRequestsCount,
-                    onTap: () async {
-                      await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (context) => RequestsScreen(
-                                  employeeId: widget.employeeId,
-                                  employeeData: widget.employeeData!)));
-                      _loadAllData();
-                    },
-                  ),
-                  _buildActionCard(
-                    title: Translations.getText('attendance_history', lang),
-                    icon: Icons.history,
-                    color: semantic.success,
-                    onTap: () async {
-                      await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (context) => AttendanceHistoryScreen(
-                                  employeeNumber: _currentEmployee!.employeeNumber,
-                                  clientId: widget.employeeData?.clientID ?? 30,
-                                  employeeName: _currentEmployee!.name)));
-                      _loadAllData();
-                    },
-                  ),
-                  if (showApprovalsCard)
-                    _buildActionCard(
-                      title: Translations.getText('approvals', lang),
-                      icon: Icons.approval,
-                      color: scheme.secondary,
-                      badgeCount: _pendingApprovalsCount,
-                      onTap: () async {
-                        await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (context) => ApprovalsScreen(
-                                    employeeId: widget.employeeId,
-                                    employeeData: widget.employeeData!)));
-                        _loadAllData();
-                      },
-                    ),
-                  _buildActionCard(
-                    title: Translations.getText('shifts_and_location', lang),
-                    icon: Icons.work_history,
-                    color: scheme.primary,
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => ShiftInfoScreen(
-                          clientId: widget.employeeData!.clientID,
-                          employeeNumber: widget.employeeData!.employeeNumber,
-                          email: widget.employeeData!.email,
-                          employeeId: widget.employeeData!.employeeID,
-                        ),
-                      ),
-                    ),
-                  ),
-                  _buildActionCard(
-                    title: Translations.getText('salary_details_title', lang),
-                    icon: Icons.payments,
-                    color: scheme.tertiary,
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => SalaryDetailsScreen(
-                          employeeId: widget.employeeData!.employeeID,
-                          clientId: widget.employeeData!.clientID,
-                        ),
-                      ),
-                    ),
-                  ),
-                  _buildActionCard(
-                    title: Translations.getText('tasks_title', lang),
-                    icon: Icons.task_alt_rounded,
-                    color: scheme.primary,
-                    onTap: () async {
-                      await Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => UserTasksScreen(
-                            clientId: widget.employeeData!.clientID,
-                            employeeId: widget.employeeData!.employeeID,
-                          ),
-                        ),
-                      );
-                      _loadAllData();
-                    },
-                  ),
-                ],
               );
+              _loadAllData();
             },
           ),
-        ],
-      ),
+          _buildActionCard(
+            title: Translations.getText('shifts_and_location', lang),
+            icon: Icons.work_history,
+            color: scheme.primary,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => ShiftInfoScreen(
+                  clientId: widget.employeeData!.clientID,
+                  employeeNumber: widget.employeeData!.employeeNumber,
+                  email: widget.employeeData!.email,
+                  employeeId: widget.employeeData!.employeeID,
+                ),
+              ),
+            ),
+          ),
+        ];
+
+        final requestsAndApprovalsActions = <Widget>[
+          _buildActionCard(
+            title: Translations.getText('my_requests', lang),
+            icon: Icons.assignment,
+            color: scheme.primary,
+            badgeCount: ((_pendingCounts?.loan ?? 0) +
+                        (_pendingCounts?.leave ?? 0) +
+                        (_pendingCounts?.other ?? 0)) >
+                    _myPendingRequestsCount
+                ? ((_pendingCounts?.loan ?? 0) +
+                    (_pendingCounts?.leave ?? 0) +
+                    (_pendingCounts?.other ?? 0))
+                : _myPendingRequestsCount,
+            onTap: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => RequestsScreen(
+                    employeeId: widget.employeeId,
+                    employeeData: widget.employeeData!,
+                  ),
+                ),
+              );
+              _loadAllData();
+            },
+          ),
+          if (showApprovalsCard)
+            _buildActionCard(
+              title: Translations.getText('approvals', lang),
+              icon: Icons.approval,
+              color: scheme.secondary,
+              badgeCount: _pendingApprovalsCount,
+              onTap: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ApprovalsScreen(
+                      employeeId: widget.employeeId,
+                      employeeData: widget.employeeData!,
+                    ),
+                  ),
+                );
+                _loadAllData();
+              },
+            ),
+        ];
+
+        final tasksAndFinanceActions = <Widget>[
+          _buildActionCard(
+            title: Translations.getText('tasks_title', lang),
+            icon: Icons.task_alt_rounded,
+            color: scheme.primary,
+            onTap: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => UserTasksScreen(
+                    clientId: widget.employeeData!.clientID,
+                    employeeId: widget.employeeData!.employeeID,
+                  ),
+                ),
+              );
+              _loadAllData();
+            },
+          ),
+          if (_hasTaskCreatorAccess)
+            _buildActionCard(
+              title: Translations.getText('task_creator_title', lang),
+              icon: Icons.playlist_add_check_rounded,
+              color: scheme.secondary,
+              badgeCount: _managedEmployeesCount,
+              onTap: () async {
+                await Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => TaskCreatorScreen(
+                      clientId: widget.employeeData!.clientID,
+                      creatorEmployeeId:
+                          int.tryParse(widget.employeeData!.employeeNumber) ??
+                              widget.employeeData!.employeeID,
+                    ),
+                  ),
+                );
+                _loadAllData();
+              },
+            ),
+          _buildActionCard(
+            title: Translations.getText('salary_details_title', lang),
+            icon: Icons.payments,
+            color: scheme.tertiary,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => SalaryDetailsScreen(
+                  employeeId: widget.employeeData!.employeeID,
+                  clientId: widget.employeeData!.clientID,
+                ),
+              ),
+            ),
+          ),
+        ];
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            buildGroupSectionCard(
+              title: Translations.getText(
+                'quick_actions_section_attendance_shifts',
+                lang,
+              ),
+              actions: attendanceAndShiftsActions,
+            ),
+            const SizedBox(height: 16),
+            buildGroupSectionCard(
+              title: Translations.getText(
+                'quick_actions_section_requests_approvals',
+                lang,
+              ),
+              actions: requestsAndApprovalsActions,
+            ),
+            const SizedBox(height: 16),
+            buildGroupSectionCard(
+              title: Translations.getText(
+                'quick_actions_section_tasks_finance',
+                lang,
+              ),
+              actions: tasksAndFinanceActions,
+            ),
+          ],
+        );
+      },
     );
   }
 
