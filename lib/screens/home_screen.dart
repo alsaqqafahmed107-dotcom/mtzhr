@@ -59,6 +59,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // Dashboard Data
   List<request_models.EmployeeRequest> _recentRequests = [];
   int _unreadNotificationsCount = 0;
+  int _newTasksCount = 0;
   PendingCounts? _pendingCounts;
   int _pendingApprovalsCount = 0;
   int _myPendingRequestsCount = 0;
@@ -240,6 +241,22 @@ class _HomeScreenState extends State<HomeScreen> {
           _log('Error fetching app notices: $e');
           return <AppNotice>[];
         }),
+
+        ApiService.getUserTasks(
+          clientId,
+          employeeId: empId,
+          status: 'Pending',
+          page: 1,
+          pageSize: 200,
+        ).then<int>((resp) {
+          if (resp['Success'] != true) return 0;
+          final data = resp['Data'];
+          if (data is List) return data.length;
+          return 0;
+        }).catchError((e) {
+          _log('Error fetching tasks count: $e');
+          return 0;
+        }),
       ]);
 
       if (!mounted) return;
@@ -268,6 +285,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
         // 4. Pending Counts
         _pendingCounts = results[3] as PendingCounts?;
+
+        _newTasksCount = results[10] as int;
 
         // 5. Pending Approvals Count — STRICT SECURITY GATE
         final approvalsResponse = results[4] as Map<String, dynamic>;
@@ -1430,6 +1449,7 @@ class _HomeScreenState extends State<HomeScreen> {
             title: Translations.getText('tasks_title', lang),
             icon: Icons.task_alt_rounded,
             color: scheme.primary,
+            badgeCount: _newTasksCount,
             onTap: () async {
               await Navigator.push(
                 context,
@@ -1448,7 +1468,6 @@ class _HomeScreenState extends State<HomeScreen> {
               title: Translations.getText('task_creator_title', lang),
               icon: Icons.playlist_add_check_rounded,
               color: scheme.secondary,
-              badgeCount: _managedEmployeesCount,
               onTap: () async {
                 await Navigator.push(
                   context,

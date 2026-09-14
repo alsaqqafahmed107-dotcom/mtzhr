@@ -3033,6 +3033,7 @@ class ApiService {
     String? description,
     required DateTime dueDateTime,
     required List<int> assignedEmployeeIds,
+    bool? requiresApproval,
   }) async {
     try {
       final uri = Uri.parse(
@@ -3044,6 +3045,7 @@ class ApiService {
         'DueDateTime':
             '${dueDateTime.year.toString().padLeft(4, '0')}-${dueDateTime.month.toString().padLeft(2, '0')}-${dueDateTime.day.toString().padLeft(2, '0')} ${dueDateTime.hour.toString().padLeft(2, '0')}:${dueDateTime.minute.toString().padLeft(2, '0')}',
         'AssignedEmployeeIDs': assignedEmployeeIds,
+        if (requiresApproval != null) 'RequiresApproval': requiresApproval,
       };
 
       final response = await http.post(

@@ -729,6 +729,10 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         Provider.of<LanguageService>(context, listen: false);
     final lang = languageService.currentLocale.languageCode;
 
+    final selectedMethod = widget.authenticationMethod?.toUpperCase();
+    final requestUsesFace =
+        selectedMethod == 'FACE' || widget.authenticationMethod == 'الوجه';
+
     if (_currentPosition == null) {
       _showError(Translations.getText('cannot_determine_location', lang),
           Translations.getText('wait_for_location', lang));
@@ -743,55 +747,52 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     try {
       // --- إضافة التحقق من بصمة الوجه (Server-side) ---
       // يتم التحقق أولاً كما هو مطلوب في الـ Flow
-      setState(() {
-        _currentStep = 'جاري التحقق من إعدادات الوجه...';
-      });
+      bool hasStoredFace = false;
+      Map<String, dynamic> faceStatus = <String, dynamic>{};
 
-      final faceStatus = await FaceApiService.getEmployeeFaceImageStatus(
-        widget.clientId,
-        widget.employeeNumber,
-      );
-      // #region debug-point D:face-status
-      unawaited(_reportDebugEvent(
-        'D',
-        'attendance_screen.dart:_processAttendance',
-        'Fetched face status before attendance',
-        data: {
-          'success': faceStatus['Success'],
-          'attendanceMethod': faceStatus['AttendanceMethod'],
-          'isFaceRequired': faceStatus['IsFaceRequired'],
-          'hasFaceTemplate': faceStatus['HasFaceTemplate'],
-          'hasFaceImage': faceStatus['HasFaceImage'],
-          'hasImage': faceStatus['HasImage'],
-          'isRegistered': faceStatus['IsRegistered'],
-          'message': faceStatus['Message'],
-        },
-      ));
-      // #endregion
-
-      if (faceStatus['Success'] != true) {
-        _showError('خطأ في التحقق من الوجه',
-            faceStatus['Message'] ?? 'لا يمكن الاتصال بسيرفر البصمة حالياً');
+      if (requestUsesFace) {
         setState(() {
-          _isProcessing = false;
+          _currentStep = 'جاري التحقق من إعدادات الوجه...';
         });
-        return;
+
+        faceStatus = await FaceApiService.getEmployeeFaceImageStatus(
+          widget.clientId,
+          widget.employeeNumber,
+        );
+        // #region debug-point D:face-status
+        unawaited(_reportDebugEvent(
+          'D',
+          'attendance_screen.dart:_processAttendance',
+          'Fetched face status before attendance',
+          data: {
+            'success': faceStatus['Success'],
+            'attendanceMethod': faceStatus['AttendanceMethod'],
+            'isFaceRequired': faceStatus['IsFaceRequired'],
+            'hasFaceTemplate': faceStatus['HasFaceTemplate'],
+            'hasFaceImage': faceStatus['HasFaceImage'],
+            'hasImage': faceStatus['HasImage'],
+            'isRegistered': faceStatus['IsRegistered'],
+            'message': faceStatus['Message'],
+          },
+        ));
+        // #endregion
+
+        if (faceStatus['Success'] != true) {
+          _showError('خطأ في التحقق من الوجه',
+              faceStatus['Message'] ?? 'لا يمكن الاتصال بسيرفر البصمة حالياً');
+          setState(() {
+            _isProcessing = false;
+          });
+          return;
+        }
+
+        hasStoredFace = faceStatus['HasFaceTemplate'] == true ||
+            faceStatus['HasFaceImage'] == true ||
+            faceStatus['HasImage'] == true ||
+            faceStatus['IsRegistered'] == true;
       }
 
-      final attendanceMethod =
-          int.tryParse(faceStatus['AttendanceMethod']?.toString() ?? '0') ?? 0;
-      final hasStoredFace = faceStatus['HasFaceTemplate'] == true ||
-          faceStatus['HasFaceImage'] == true ||
-          faceStatus['HasImage'] == true ||
-          faceStatus['IsRegistered'] == true;
-      final selectedMethod = widget.authenticationMethod?.toUpperCase();
-      final shouldRequireFace = faceStatus['IsFaceRequired'] == true ||
-          attendanceMethod == 1 ||
-          attendanceMethod == 2 ||
-          selectedMethod == 'FACE' ||
-          widget.authenticationMethod == 'الوجه';
-
-      if (shouldRequireFace) {
+      if (requestUsesFace) {
         bool faceVerified = false;
         bool enrollmentCompleted = false;
         Object? enrollmentResult;
@@ -1273,14 +1274,38 @@ class _AttendanceScreenState extends State<AttendanceScreen>
 
       // جمع معلومات الجهاز
       final rawDeviceInfo = await _getDeviceInfo();
-      final faceAuthInUse = _usedFaceVerification || shouldRequireFace;
-      final deviceInfo = faceAuthInUse
+      final deviceInfo = requestUsesFace
           ? jsonEncode({
               'device': rawDeviceInfo,
               'attendanceAuth': 'FACE',
               'faceVerification': _faceVerificationProof,
             })
           : rawDeviceInfo;
+
+      final proof = requestUsesFace ? _faceVerificationProof : null;
+      final bool? faceVerificationPassed =
+          requestUsesFace ? _usedFaceVerification : null;
+      final String? faceVerificationAtUtc = requestUsesFace
+          ? (proof == null ? null : proof['verificationAtUtc']?.toString())
+          : null;
+      final int? faceVerificationCapturedAtMs = requestUsesFace
+          ? int.tryParse(
+              (proof == null ? null : proof['verificationCapturedAtMs']?.toString()) ??
+                  '',
+            )
+          : null;
+      final String? faceVerificationEmployeeNumber = requestUsesFace
+          ? (proof == null ? null : proof['employeeNumber']?.toString())
+          : null;
+      final double? faceVerificationConfidence = requestUsesFace
+          ? ((proof == null ? null : proof['confidenceScore']) as num?)?.toDouble()
+          : null;
+      final double? faceLivenessScore = requestUsesFace
+          ? ((proof == null ? null : proof['livenessScore']) as num?)?.toDouble()
+          : null;
+      final String? faceVerificationSource = requestUsesFace
+          ? (proof == null ? null : proof['source']?.toString())
+          : null;
 
       // إنشاء نموذج الحضور - punchTime سيتم تعيينه من السيرفر وليس من الجوال
       // هذا يضمن دقة الوقت المسجل في قاعدة البيانات ومنع التلاعب
@@ -1295,23 +1320,14 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         notes: widget.isCheckIn ? 'Check In' : 'Check Out',
         deviceInfo: deviceInfo,
         temperature: null,
-        authenticationMethod:
-            _usedFaceVerification || shouldRequireFace ? 'FACE' : 'GPS',
-        faceVerificationPassed: _usedFaceVerification,
-        faceVerificationAtUtc:
-            _faceVerificationProof?['verificationAtUtc']?.toString(),
-        faceVerificationCapturedAtMs:
-            int.tryParse(
-              _faceVerificationProof?['verificationCapturedAtMs']?.toString() ??
-                  '',
-            ),
-        faceVerificationEmployeeNumber:
-            _faceVerificationProof?['employeeNumber']?.toString(),
-        faceVerificationConfidence:
-            (_faceVerificationProof?['confidenceScore'] as num?)?.toDouble(),
-        faceLivenessScore:
-            (_faceVerificationProof?['livenessScore'] as num?)?.toDouble(),
-        faceVerificationSource: _faceVerificationProof?['source']?.toString(),
+        authenticationMethod: requestUsesFace ? 'FACE' : 'GPS',
+        faceVerificationPassed: faceVerificationPassed,
+        faceVerificationAtUtc: faceVerificationAtUtc,
+        faceVerificationCapturedAtMs: faceVerificationCapturedAtMs,
+        faceVerificationEmployeeNumber: faceVerificationEmployeeNumber,
+        faceVerificationConfidence: faceVerificationConfidence,
+        faceLivenessScore: faceLivenessScore,
+        faceVerificationSource: faceVerificationSource,
         isLocationStable: stabilityResult.isStable,
         locationMaxVariation: stabilityResult.maxDistanceVariation,
         locationAverageDistance: stabilityResult.averageDistance,

@@ -164,12 +164,15 @@ class _UserTaskDetailsScreenState extends State<UserTaskDetailsScreen> {
       case 'Completed':
         return semantic.success;
       case 'InProgress':
-        return scheme.primary;
+        return semantic.info;
       case 'AwaitingApproval':
-        return scheme.tertiary;
+        return semantic.warning;
       case 'Pending':
+        return scheme.outline;
+      case 'Cancelled':
+        return scheme.error;
       default:
-        return scheme.secondary;
+        return scheme.primary;
     }
   }
 

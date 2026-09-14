@@ -44,9 +44,93 @@ class _TaskCreatorScreenState extends State<TaskCreatorScreen> {
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
   DateTime _dueDateTime = DateTime.now().add(const Duration(hours: 2));
+  bool _autoApprove = true;
 
   String _tasksFilter = 'All';
+  List<UserTask> _allCreatedTasks = const [];
   List<UserTask> _createdTasks = const [];
+
+  Map<String, int> _taskStats(List<UserTask> tasks) {
+    final map = <String, int>{
+      'Total': 0,
+      'Pending': 0,
+      'InProgress': 0,
+      'AwaitingApproval': 0,
+      'Completed': 0,
+      'Cancelled': 0,
+    };
+    for (final t in tasks) {
+      map['Total'] = (map['Total'] ?? 0) + 1;
+      final s = (t.status).trim();
+      if (map.containsKey(s)) {
+        map[s] = (map[s] ?? 0) + 1;
+      }
+    }
+    return map;
+  }
+
+  Widget _buildStatCard({
+    required ColorScheme scheme,
+    required String title,
+    required int value,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.6)),
+        boxShadow: [
+          BoxShadow(
+            color: scheme.shadow.withValues(alpha: 0.05),
+            blurRadius: 18,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: color.withValues(alpha: 0.22)),
+            ),
+            child: Icon(icon, color: color),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value.toString(),
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w900,
+                        color: scheme.onSurface,
+                      ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   bool _asBool(dynamic v) {
     if (v == null) return false;
@@ -118,8 +202,23 @@ class _TaskCreatorScreenState extends State<TaskCreatorScreen> {
   Future<void> _loadCreatedTasks() async {
     setState(() => _isLoadingTasks = true);
     try {
+      final respAll = await ApiService.getCreatorTasks(
+        widget.clientId,
+        creatorEmployeeId: widget.creatorEmployeeId,
+        status: null,
+        page: 1,
+        pageSize: 200,
+      );
+      final okAll = respAll['Success'] == true;
+      final dataAll = (respAll['Data'] as List?) ?? const [];
+      final allTasks = okAll
+          ? dataAll.whereType<Map<String, dynamic>>().map(UserTask.fromJson).toList()
+          : <UserTask>[];
+
       final status = _tasksFilter == 'All' ? null : _tasksFilter;
-      final resp = await ApiService.getCreatorTasks(
+      final resp = status == null
+          ? respAll
+          : await ApiService.getCreatorTasks(
         widget.clientId,
         creatorEmployeeId: widget.creatorEmployeeId,
         status: status,
@@ -133,7 +232,10 @@ class _TaskCreatorScreenState extends State<TaskCreatorScreen> {
           : <UserTask>[];
 
       if (!mounted) return;
-      setState(() => _createdTasks = tasks);
+      setState(() {
+        _allCreatedTasks = allTasks;
+        _createdTasks = tasks;
+      });
     } finally {
       if (mounted) setState(() => _isLoadingTasks = false);
     }
@@ -355,6 +457,7 @@ class _TaskCreatorScreenState extends State<TaskCreatorScreen> {
         description: _descriptionController.text.trim(),
         dueDateTime: _dueDateTime,
         assignedEmployeeIds: _selectedEmployeeIds.toList()..sort(),
+        requiresApproval: !_autoApprove,
       );
 
       final ok = resp['Success'] == true;
@@ -372,6 +475,7 @@ class _TaskCreatorScreenState extends State<TaskCreatorScreen> {
           _selectedEmployeeIds = <int>{};
           _attachments = const [];
           _dueDateTime = DateTime.now().add(const Duration(hours: 2));
+          _autoApprove = true;
         });
         await _loadCreatedTasks();
       }
@@ -432,6 +536,23 @@ class _TaskCreatorScreenState extends State<TaskCreatorScreen> {
         return Translations.getText('cancelled', lang);
       default:
         return status;
+    }
+  }
+
+  Color _statusColor(ColorScheme scheme, AppSemanticColors semantic, String status) {
+    switch (status) {
+      case 'Completed':
+        return semantic.success;
+      case 'InProgress':
+        return semantic.info;
+      case 'AwaitingApproval':
+        return semantic.warning;
+      case 'Pending':
+        return scheme.outline;
+      case 'Cancelled':
+        return scheme.error;
+      default:
+        return scheme.primary;
     }
   }
 
@@ -532,6 +653,105 @@ class _TaskCreatorScreenState extends State<TaskCreatorScreen> {
               : ListView(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
                   children: [
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final statsSource = _allCreatedTasks.isNotEmpty ? _allCreatedTasks : _createdTasks;
+                        final stats = _taskStats(statsSource);
+                        final cardWidth = (constraints.maxWidth - 12) / 2;
+
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    Translations.getText('task_creator_dashboard', lang),
+                                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                  ),
+                                ),
+                                if (_isLoadingTasks)
+                                  const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            Wrap(
+                              spacing: 12,
+                              runSpacing: 12,
+                              children: [
+                                SizedBox(
+                                  width: cardWidth,
+                                  child: _buildStatCard(
+                                    scheme: scheme,
+                                    title: Translations.getText('task_creator_stats_total', lang),
+                                    value: stats['Total'] ?? 0,
+                                    icon: Icons.dashboard_rounded,
+                                    color: scheme.primary,
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: cardWidth,
+                                  child: _buildStatCard(
+                                    scheme: scheme,
+                                    title: Translations.getText('task_creator_stats_completed', lang),
+                                    value: stats['Completed'] ?? 0,
+                                    icon: Icons.check_circle_rounded,
+                                    color: semantic.success,
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: cardWidth,
+                                  child: _buildStatCard(
+                                    scheme: scheme,
+                                    title: Translations.getText('task_creator_stats_pending', lang),
+                                    value: stats['Pending'] ?? 0,
+                                    icon: Icons.pending_actions_rounded,
+                                    color: scheme.outline,
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: cardWidth,
+                                  child: _buildStatCard(
+                                    scheme: scheme,
+                                    title: Translations.getText('task_creator_stats_inprogress', lang),
+                                    value: stats['InProgress'] ?? 0,
+                                    icon: Icons.timelapse_rounded,
+                                    color: semantic.info,
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: cardWidth,
+                                  child: _buildStatCard(
+                                    scheme: scheme,
+                                    title: Translations.getText('task_creator_stats_awaiting', lang),
+                                    value: stats['AwaitingApproval'] ?? 0,
+                                    icon: Icons.fact_check_rounded,
+                                    color: semantic.warning,
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: cardWidth,
+                                  child: _buildStatCard(
+                                    scheme: scheme,
+                                    title: Translations.getText('task_creator_stats_cancelled', lang),
+                                    value: stats['Cancelled'] ?? 0,
+                                    icon: Icons.cancel_rounded,
+                                    color: scheme.error,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                          ],
+                        );
+                      },
+                    ),
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
@@ -636,6 +856,19 @@ class _TaskCreatorScreenState extends State<TaskCreatorScreen> {
                               child: Text(Translations.getText('edit', lang)),
                             ),
                           ),
+                          CheckboxListTile(
+                            contentPadding: EdgeInsets.zero,
+                            value: _autoApprove,
+                            onChanged: _isSubmitting
+                                ? null
+                                : (v) => setState(() => _autoApprove = v == true),
+                            title: Text(
+                              Translations.getText('task_creator_auto_approve', lang),
+                            ),
+                            subtitle: Text(
+                              Translations.getText('task_creator_auto_approve_hint', lang),
+                            ),
+                          ),
                           const SizedBox(height: 10),
                           SizedBox(
                             width: double.infinity,
@@ -727,30 +960,42 @@ class _TaskCreatorScreenState extends State<TaskCreatorScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      t.title,
-                                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                            fontWeight: FontWeight.w800,
+                              Builder(
+                                builder: (context) {
+                                  final statusColor = _statusColor(scheme, semantic, t.status);
+                                  return Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          t.title,
+                                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                                fontWeight: FontWeight.w800,
+                                              ),
+                                        ),
+                                      ),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 6,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: statusColor.withValues(alpha: 0.12),
+                                          borderRadius: BorderRadius.circular(999),
+                                          border: Border.all(
+                                            color: statusColor.withValues(alpha: 0.35),
                                           ),
-                                    ),
-                                  ),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                    decoration: BoxDecoration(
-                                      color: scheme.primaryContainer.withValues(alpha: 0.6),
-                                      borderRadius: BorderRadius.circular(999),
-                                    ),
-                                    child: Text(
-                                      _statusLabel(lang, t.status),
-                                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                    ),
-                                  ),
-                                ],
+                                        ),
+                                        child: Text(
+                                          _statusLabel(lang, t.status),
+                                          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                                                fontWeight: FontWeight.w700,
+                                                color: statusColor,
+                                              ),
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                },
                               ),
                               const SizedBox(height: 8),
                               Text(

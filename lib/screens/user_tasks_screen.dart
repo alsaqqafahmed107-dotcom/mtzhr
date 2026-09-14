@@ -90,12 +90,13 @@ class _UserTasksScreenState extends State<UserTasksScreen> {
       case 'Completed':
         return semantic.success;
       case 'InProgress':
-        return scheme.primary;
+        return semantic.info;
       case 'AwaitingApproval':
-        return scheme.tertiary;
+        return semantic.warning;
       case 'Pending':
+        return scheme.outline;
       default:
-        return scheme.secondary;
+        return scheme.primary;
     }
   }
 

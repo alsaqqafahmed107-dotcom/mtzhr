@@ -510,6 +510,11 @@ class _LoginScreenState extends State<LoginScreen>
       employee.employeeNumber,
     );
 
+    final attendanceMethod =
+        int.tryParse(faceStatus['AttendanceMethod']?.toString() ?? '0') ?? 0;
+    final shouldRequireFace = faceStatus['IsFaceRequired'] == true ||
+        attendanceMethod == 1 ||
+        attendanceMethod == 2;
     final hasStoredFace = faceStatus['HasFaceTemplate'] == true ||
         faceStatus['HasFaceImage'] == true ||
         faceStatus['HasImage'] == true ||
@@ -524,6 +529,9 @@ class _LoginScreenState extends State<LoginScreen>
         'clientId': employee.clientID,
         'lang': lang,
         'statusSuccess': faceStatus['Success'] == true,
+        'attendanceMethod': faceStatus['AttendanceMethod'],
+        'isFaceRequired': faceStatus['IsFaceRequired'],
+        'shouldRequireFace': shouldRequireFace,
         'hasStoredFace': hasStoredFace,
         'endpointMode': faceStatus['EndpointMode'],
         'usedLegacyFallback': faceStatus['UsedLegacyFallback'],
@@ -532,27 +540,11 @@ class _LoginScreenState extends State<LoginScreen>
     ));
 
     if (faceStatus['Success'] != true) {
-      final statusMessage =
-          (faceStatus['Message'] ?? '').toString().trim();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              lang == 'ar'
-                  ? (statusMessage.isNotEmpty
-                      ? 'تعذر التحقق من حالة بصمة الوجه: $statusMessage'
-                      : 'تعذر التحقق من حالة بصمة الوجه حالياً. تأكد من اتصال التطبيق بالخادم ثم أعد المحاولة.')
-                  : (statusMessage.isNotEmpty
-                      ? 'Unable to check face registration status: $statusMessage'
-                      : 'Unable to check face registration status right now. Please verify the app can reach the server and try again.'),
-              style: const TextStyle(fontFamily: 'Tajawal'),
-            ),
-            backgroundColor: Colors.red,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
-      return false;
+      return true;
+    }
+
+    if (!shouldRequireFace) {
+      return true;
     }
 
     if (hasStoredFace) {
